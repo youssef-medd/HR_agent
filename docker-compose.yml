@@ -45,7 +45,7 @@ services:
     container_name: welyne-api
     restart: unless-stopped
     working_dir: /app
-    command: ["sleep", "infinity"]  # Day 2 replaces with uvicorn
+    command: ["sleep", "infinity"]  # placeholder — replaced by `uvicorn` once the api module is wired
     env_file: .env
     volumes:
       - ./api:/app
@@ -62,7 +62,7 @@ services:
     container_name: welyne-worker
     restart: unless-stopped
     working_dir: /app
-    command: ["sleep", "infinity"]  # Day 3+ replaces with celery
+    command: ["sleep", "infinity"]  # placeholder — replaced by `celery` once the worker module is wired
     env_file: .env
     volumes:
       - ./worker:/app
@@ -73,7 +73,7 @@ services:
         condition: service_healthy
 
   # ============================================================
-  # Langfuse self-host (spec §3 · "auto-hébergé (OSS)")
+  # Langfuse — self-hosted LLM observability
   # v3 stack: web + worker + clickhouse + minio
   # ============================================================
   clickhouse:
