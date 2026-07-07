@@ -1,0 +1,12 @@
+fastapi>=0.115
+uvicorn[standard]>=0.34
+pydantic>=2.10
+pydantic-settings>=2.6
+python-dotenv>=1.0
+
+# LLM gateway
+openai>=1.60
+langfuse>=3.0
+
+# Optional fallback support (kept for the next iteration of the gateway)
+groq>=0.15

@@ -209,6 +209,24 @@ All third-party API keys, `JWT_SECRET`, `PII_MASK_SALT`, and Langfuse infrastruc
 
 ---
 
+## ADR-012 · MinIO bucket bootstrap
+
+**Date**: 2026-07-07
+**Status**: Accepted
+
+### Context
+Langfuse v3 persists trace event batches in an S3-compatible object store (MinIO in the self-host stack). The `langfuse` bucket is not created automatically by the MinIO server on first boot, causing every trace upload to fail with `NoSuchBucket` until the bucket is provisioned manually.
+
+### Decision
+Add a short-lived `minio-init` service to `docker-compose.yml`. It runs the `minio/mc` client, points it at the internal MinIO endpoint, and creates the `langfuse` bucket with `mc mb --ignore-existing`. The `--ignore-existing` flag makes the step idempotent, so it is safe to run on every `docker compose up`.
+
+### Consequences
+- Fresh clones bootstrap into a fully working observability pipeline with a single `docker compose up`.
+- No manual step in the MinIO console is required.
+- The bootstrap adds a small dependency on the `minio/mc` image but no runtime overhead beyond the first boot.
+
+---
+
 ## Template
 
 ```
