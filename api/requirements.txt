@@ -3,6 +3,16 @@ uvicorn[standard]>=0.34
 pydantic>=2.10
 pydantic-settings>=2.6
 python-dotenv>=1.0
+python-multipart>=0.0.9
+
+# Persistence
+sqlalchemy>=2.0
+alembic>=1.13
+psycopg[binary]>=3.2
+
+# Auth
+bcrypt>=4.2
+python-jose[cryptography]>=3.3
 
 # LLM gateway
 openai>=1.60
@@ -10,3 +20,9 @@ langfuse>=3.0
 
 # Optional fallback support (kept for the next iteration of the gateway)
 groq>=0.15
+
+# Dev / CI
+ruff>=0.6
+mypy>=1.11
+pytest>=8.3
+httpx>=0.27

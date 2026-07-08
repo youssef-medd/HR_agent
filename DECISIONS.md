@@ -227,6 +227,29 @@ Add a short-lived `minio-init` service to `docker-compose.yml`. It runs the `min
 
 ---
 
+## ADR-013 · API service now runs uvicorn (supersedes ADR-003 for `api`)
+
+**Date**: 2026-07-08
+**Status**: Accepted — supersedes ADR-003 for the `api` service only
+
+### Context
+ADR-003 set both `api` and `worker` compose commands to `sleep infinity` while their code was scaffolded. The FastAPI app module (`api/app/main.py`) now exists, with a `/health` endpoint, JWT auth (`/auth/login`, `/auth/me`), and a smoke-test LLM endpoint (`/chat/hello`) that emits a Langfuse trace tagged with the caller's `user_id`.
+
+### Decision
+Flip the `api` service `command` in `docker-compose.yml` to `uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload`. The `worker` service remains on `sleep infinity` until the LangGraph orchestrator module (A0) lands in sprint 2.
+
+The Alembic root (`alembic.ini`) and `migrations/` directory are mounted read/write into the container so `docker exec welyne-api alembic upgrade head` and `python -m scripts.seed_admin` both work without a rebuild.
+
+### Consequences
+- `docker compose up -d` boots a live FastAPI server. Sprint 0-1 acceptance test is exercised end-to-end over HTTP.
+- ADR-003 remains in force for `worker`.
+
+### References
+- Supersedes ADR-003 (partial)
+- Sprint 0-1 acceptance: `docker compose up` → login → traced LLM call visible in Langfuse UI
+
+---
+
 ## Template
 
 ```

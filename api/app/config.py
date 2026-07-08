@@ -1,0 +1,29 @@
+"""Runtime configuration.
+
+Single source of truth for env-driven settings. Modules import `settings` rather
+than reading `os.environ` directly so tests can override via pydantic-settings
+and so a missing variable fails at import time with a clear message.
+"""
+
+from __future__ import annotations
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    database_url: str = Field(alias="DATABASE_URL")
+
+    jwt_secret: str = Field(alias="JWT_SECRET")
+    jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
+    jwt_expire_hours: int = Field(default=8, alias="JWT_EXPIRE_HOURS")
+
+    admin_email: str = Field(default="admin@welyne.local", alias="ADMIN_EMAIL")
+    admin_password: str = Field(default="", alias="ADMIN_PASSWORD")
+
+    app_env: str = Field(default="dev", alias="APP_ENV")
+
+
+settings = Settings()  # type: ignore[call-arg]

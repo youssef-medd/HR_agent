@@ -8,23 +8,7 @@ Multi-agent recruitment platform. Automates the recruitment cycle from job intak
 
 Monorepo, single `docker compose up` deploys the full stack.
 
-```
-Next.js dashboard  ──HTTP──▶  FastAPI (api)  ──enqueue──▶  Redis  ──▶  Celery worker
-                                    │                                       │
-                                    ▼                                       ▼
-                            PostgreSQL 16                    LangGraph orchestrator (A0)
-                             + pgvector                       ├─ A1  Job Intake & Posting
-                                    ▲                         ├─ A2  Sourcing
-       Candidate portal ────────────┘                         ├─ A3  CV Parsing
-       (forms · uploads · chat)                               ├─ A4  Scoring & Matching
-                                                              ├─ A5  Conversational Pre-screening
-                                                              ├─ A6  Interview Scheduling
-                                                              ├─ A7  Communications
-                                                              ├─ A8  Onboarding
-                                                              └─ A9  Reporting & Analytics
-
-External: Groq (LLM) · SMTP · WhatsApp Cloud API · Cal.com · Langfuse
-```
+![Welyne HR AI Agent — architecture](.github/architecture.png)
 
 Agents are LangGraph subgraphs executed inside the worker — not separate services. Orchestrator owns the application state machine and is persisted via the LangGraph Postgres checkpointer.
 

@@ -56,6 +56,9 @@ def llm_call(
     *,
     seed: int = 42,
     temperature: float = 0.0,
+    user_id: str | None = None,
+    session_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> Any:
     """Invoke an LLM through the gateway.
 
@@ -92,6 +95,14 @@ def llm_call(
     }
     if schema is not None:
         kwargs["response_format"] = {"type": "json_object"}
+
+    trace_meta: dict[str, Any] = dict(metadata) if metadata else {}
+    if user_id is not None:
+        trace_meta["user_id"] = user_id
+    if session_id is not None:
+        trace_meta["session_id"] = session_id
+    if trace_meta:
+        kwargs["metadata"] = trace_meta
 
     completion = _get_client().chat.completions.create(**kwargs)
     content = completion.choices[0].message.content or ""

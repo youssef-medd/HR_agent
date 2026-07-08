@@ -45,12 +45,12 @@ services:
     container_name: welyne-api
     restart: unless-stopped
     working_dir: /app
-    # Dev container stays up; endpoints and scripts are invoked explicitly.
-    # Once the FastAPI app module is wired, the CMD in api/Dockerfile takes over.
-    command: ["sleep", "infinity"]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     env_file: .env
     volumes:
       - ./api:/app
+      - ./migrations:/app/migrations
+      - ./alembic.ini:/app/alembic.ini
     ports:
       - "8000:8000"
     depends_on:
