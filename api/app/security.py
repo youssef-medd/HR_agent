@@ -11,7 +11,7 @@ truncation so verification stays consistent.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 import bcrypt
@@ -44,7 +44,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def create_access_token(*, sub: str, role: str) -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "sub": sub,
         "role": role,
