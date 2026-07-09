@@ -25,5 +25,9 @@ class Settings(BaseSettings):
 
     app_env: str = Field(default="dev", alias="APP_ENV")
 
+    cors_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:3001"], alias="CORS_ORIGINS"
+    )
+
 
 settings = Settings()  # type: ignore[call-arg]
