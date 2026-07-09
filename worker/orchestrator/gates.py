@@ -45,16 +45,26 @@ def require_gate(
     gate_name: str,
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    row = NeedsAttention(
-        application_id=application_id,
-        reason="sensitive_gate",
-        gate=gate_name,
-        context=context or {},
-        status="open",
+    row = db.scalar(
+        select(NeedsAttention)
+        .where(
+            NeedsAttention.application_id == application_id,
+            NeedsAttention.gate == gate_name,
+            NeedsAttention.status == "open",
+        )
+        .order_by(NeedsAttention.created_at.desc())
     )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
+    if row is None:
+        row = NeedsAttention(
+            application_id=application_id,
+            reason="sensitive_gate",
+            gate=gate_name,
+            context=context or {},
+            status="open",
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
 
     decision: dict[str, Any] = interrupt(
         {
