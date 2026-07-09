@@ -250,6 +250,34 @@ The Alembic root (`alembic.ini`) and `migrations/` directory are mounted read/wr
 
 ---
 
+## ADR-014 · Orchestrator topology — LangGraph inside Celery workers
+
+**Date**: 2026-07-09
+**Status**: Accepted — supersedes ADR-003 for the `worker` service
+
+### Context
+Sprint 0-1 (ADR-013) delivered the foundation slice: FastAPI, JWT auth, LLM gateway, Langfuse. The `worker` service still runs `sleep infinity`. Sprint 2 introduces A0 (the supervisor described in §2.1 and the architecture PNG), which owns the application state machine, human gates, retries, and audit trail.
+
+### Decision
+- Package the orchestrator as `orchestrator` (not `app`) to avoid a namespace clash with `api/app/`. Worker container mounts `./worker` at `/w` and prepends it to `PYTHONPATH` alongside `/app` (which is the mounted `./api`).
+- Reuse the `welyne-hr-api` image for the worker. One Dockerfile, one dependency graph, one build. Compose sets the runtime `command` to `celery -A orchestrator.celery_app worker --loglevel=info --concurrency=2`.
+- Structure: `orchestrator/state_machine.py` (StrEnum + LEGAL adjacency map), `orchestrator/graph.py` (LangGraph `StateGraph`), `orchestrator/nodes.py` (stub node bodies), `orchestrator/gates.py` (sensitive human-gate primitive + the only allowed callers of the private side-effect impls), `orchestrator/side_effects.py` (leading-underscore private senders), `orchestrator/idempotency.py` (`with_ledger` helper), `orchestrator/checkpointer.py` (Postgres for prod, memory for tests), `orchestrator/celery_app.py` + `orchestrator/tasks.py`.
+- Checkpointer: `langgraph.checkpoint.postgres.PostgresSaver`, `.setup()` on worker boot. LangGraph provisions its own `checkpoints*` tables; those are intentionally not managed by Alembic.
+- Idempotency: additional to the LangGraph checkpointer. `idempotency_ledger` table keyed by `(application_id, step, attempt)`. Every side-effect wrapper goes through `with_ledger` so replays return the cached result instead of re-firing the effect.
+- Human gates: `require_gate(...)` inserts a `NeedsAttention` row and calls `interrupt(...)`. The API resumes the thread once a recruiter closes the row with a decision. Sensitive side effects (`_send_rejection_impl`, `_send_offer_impl`, `_publish_job_impl`) are private to `side_effects.py` and only referenced from `gates.py`. Enforced by `tests/test_gates_static.py` (AST scan).
+
+### Consequences
+- The two acceptance criteria in the sprint brief are testable at slice-1 scope: `test_resume_no_dupes.py` (kill mid-batch, resume, zero duplicate side effects) and `test_gates_static.py` (no rejection path bypasses the human gate).
+- A1–A9 agents plug into the graph as node bodies with zero orchestration rewrite. Their contract is `(db, state) -> state`.
+- Worker no longer boots via the `python:3.12-slim` placeholder. Supersedes ADR-003 for the `worker` service; ADR-003 stays in force historically.
+
+### References
+- Supersedes ADR-003 (worker service only)
+- Complements ADR-009 (LangChain + LangGraph mandate)
+- Sprint 2 slice 1 plan: `plans/delegated-toasting-cray.md`
+
+---
+
 ## Template
 
 ```
