@@ -60,15 +60,26 @@ services:
         condition: service_healthy
 
   worker:
-    image: python:3.12-slim
+    image: welyne-hr-api
     container_name: welyne-worker
     restart: unless-stopped
     working_dir: /app
-    command: ["sleep", "infinity"]  # placeholder — replaced by `celery` once the worker module is wired
+    command:
+      - celery
+      - -A
+      - orchestrator.celery_app
+      - worker
+      - --loglevel=info
+      - --concurrency=2
     env_file: .env
     volumes:
-      - ./worker:/app
+      - ./api:/app
+      - ./worker:/w
+    environment:
+      PYTHONPATH: /app:/w
     depends_on:
+      api:
+        condition: service_started
       postgres:
         condition: service_healthy
       redis:

@@ -21,6 +21,12 @@ langfuse>=3.0
 # Optional fallback support (kept for the next iteration of the gateway)
 groq>=0.15
 
+# Orchestrator (A0) — LangGraph + Celery
+langgraph>=0.2.55
+langgraph-checkpoint-postgres>=2.0.0
+celery[redis]>=5.4
+redis>=5.2
+
 # Dev / CI
 ruff>=0.6
 mypy>=1.11
