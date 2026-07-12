@@ -65,6 +65,15 @@ export interface ApplicationView {
   cv: CVData | null;
 }
 
+export interface ApplicationSummary {
+  id: number;
+  job_id: number;
+  candidate_ref: string;
+  state: string;
+  full_name: string | null;
+  created_at: string;
+}
+
 export const API_URL = process.env.API_URL ?? "http://localhost:8000";
 
 export const SESSION_COOKIE = "welyne_session";

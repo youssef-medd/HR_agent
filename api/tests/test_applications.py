@@ -75,5 +75,18 @@ def test_get_missing_application_404(client, auth_header):
     assert client.get("/applications/99999", headers=auth_header).status_code == 404
 
 
+def test_list_applications_returns_uploaded(client, auth_header, _stub_enqueue):
+    client.post(
+        "/applications",
+        data={"job_id": "2", "candidate_ref": "list-me@example.com"},
+        files={"file": ("cv.txt", b"Jane Doe", "text/plain")},
+        headers=auth_header,
+    )
+    resp = client.get("/applications", headers=auth_header)
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert any(r["candidate_ref"] == "list-me@example.com" and r["state"] == "RECEIVED" for r in rows)
+
+
 def test_enqueue_targets_named_task():
     assert queue.RUN_APPLICATION_STEP == "orchestrator.run_application_step"

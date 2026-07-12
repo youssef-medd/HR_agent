@@ -14,6 +14,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -39,6 +40,15 @@ class ApplicationView(BaseModel):
     candidate_ref: str
     state: str
     cv: dict[str, Any] | None = None
+
+
+class ApplicationSummary(BaseModel):
+    id: int
+    job_id: int
+    candidate_ref: str
+    state: str
+    full_name: str | None = None
+    created_at: str
 
 
 @router.post("", response_model=ApplicationCreated, status_code=status.HTTP_201_CREATED)
@@ -81,6 +91,25 @@ async def create_application(
     enqueue_application_step(row.id)
 
     return ApplicationCreated(application_id=row.id, state=row.state)
+
+
+@router.get("", response_model=list[ApplicationSummary])
+def list_applications(
+    user: Annotated[User, Depends(require_role("admin", "recruiter", "viewer"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ApplicationSummary]:
+    rows = db.scalars(select(Application).order_by(Application.id.desc())).all()
+    return [
+        ApplicationSummary(
+            id=r.id,
+            job_id=r.job_id,
+            candidate_ref=r.candidate_ref,
+            state=r.state,
+            full_name=(r.payload.get("cv") or {}).get("full_name") or None,
+            created_at=r.created_at.isoformat(),
+        )
+        for r in rows
+    ]
 
 
 @router.get("/{application_id}", response_model=ApplicationView)
