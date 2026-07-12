@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from app.models.application import Application
 from app.models.needs_attention import NeedsAttention
+from orchestrator.agents.parser import CVData
 from orchestrator.checkpointer import memory_saver
 from orchestrator.graph import build_graph
 from orchestrator.side_effects import _sent_log_reset, _sent_log_snapshot
@@ -31,7 +32,7 @@ def _seed_applications(db_factory) -> list[int]:
                 job_id=1,
                 candidate_ref=f"cand-{i}@example.com",
                 state="RECEIVED",
-                payload={},
+                payload={"cv_text": f"Candidate {i} — Python, SQL"},
             )
             db.add(row)
             db.flush()
@@ -71,7 +72,14 @@ def _run_batch(db_factory, saver, ids: list[int]) -> None:
             continue
 
 
-def test_kill_midbatch_restart_zero_duplicates(db_factory):
+def test_kill_midbatch_restart_zero_duplicates(db_factory, monkeypatch):
+    # A1 runs inside parse_node; stub it so the orchestration test stays offline.
+    from orchestrator import nodes
+
+    monkeypatch.setattr(
+        nodes, "parse_cv", lambda text, **_: CVData(full_name="Candidate", skills=["Python"])
+    )
+
     _sent_log_reset()
     saver = memory_saver()
     ids = _seed_applications(db_factory)

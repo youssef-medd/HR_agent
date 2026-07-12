@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.models.application import Application
 from app.models.application_event import ApplicationEvent
+from orchestrator.agents.parser import CVParseError, extract_text, parse_cv
 from orchestrator.gates import execute_after_rejection_gate, require_gate
 from orchestrator.idempotency import with_ledger
 from orchestrator.side_effects import _send_confirmation_impl
@@ -56,11 +57,59 @@ def _advance(db: Session, state: NodeState, to_state: State, step: str) -> NodeS
     return state
 
 
-def parse_node(db: Session, state: NodeState) -> NodeState:
-    def _work() -> dict[str, Any]:
-        return {"parsed": True}
+def _resolve_cv_text(payload: dict[str, Any]) -> str:
+    """Turn the CV reference on an application's payload into plain text.
 
-    with_ledger(db, state["application_id"], "parse", state.get("attempt", 1), _work)
+    Accepts, in priority order: pre-extracted `cv_text`; a base64 document
+    (`cv_b64` + `cv_filename`) as produced by the upload endpoint; or a
+    container-visible `cv_path`. Raises `CVParseError` when none is present.
+    """
+    if payload.get("cv_text"):
+        return str(payload["cv_text"])
+
+    filename = payload.get("cv_filename")
+    if payload.get("cv_b64") and filename:
+        import base64
+
+        return extract_text(filename, base64.b64decode(payload["cv_b64"]))
+
+    if payload.get("cv_path"):
+        path = str(payload["cv_path"])
+        with open(path, "rb") as fh:
+            return extract_text(path, fh.read())
+
+    raise CVParseError("No CV source on application payload (cv_text / cv_b64 / cv_path)")
+
+
+def parse_node(db: Session, state: NodeState) -> NodeState:
+    """A1 — extract structured CV data. Routes to NEEDS_ATTENTION on failure."""
+    app_row = db.get(Application, state["application_id"])
+    payload = dict(app_row.payload) if app_row is not None else {}
+
+    def _work() -> dict[str, Any]:
+        raw_text = _resolve_cv_text(payload)
+        cv = parse_cv(raw_text, user_id=str(state["application_id"]))
+        return cv.model_dump()
+
+    try:
+        parsed = with_ledger(
+            db, state["application_id"], "parse", state.get("attempt", 1), _work
+        )
+    except CVParseError as exc:
+        db.add(
+            ApplicationEvent(
+                application_id=state["application_id"],
+                kind="parse_failed",
+                step="parse",
+                attempt=state.get("attempt", 1),
+                payload={"error": str(exc)},
+            )
+        )
+        return _advance(db, state, State.NEEDS_ATTENTION, "parse_failed")
+
+    if app_row is not None:
+        app_row.payload = {**app_row.payload, "cv": parsed}
+    state.setdefault("scratch", {})["cv"] = parsed
     return _advance(db, state, State.PARSED, "parse")
 
 
