@@ -19,10 +19,27 @@ class Saver(Protocol):
     def get(self, config: dict) -> object | None: ...
 
 
+# Pins the from_conn_string() generator-contextmanagers alive for the process's
+# lifetime. Without this, the only reference is the yielded PostgresSaver — the
+# generator itself gets garbage-collected, which runs its `with Connection...`
+# exit and silently closes the connection underneath the saver.
+_open_contexts: list[object] = []
+
+
 def postgres_saver(conn_str: str) -> object:
     from langgraph.checkpoint.postgres import PostgresSaver
 
-    saver = PostgresSaver.from_conn_string(conn_str)
+    # PostgresSaver calls psycopg.connect() directly, which doesn't understand
+    # SQLAlchemy's "+driver" dialect suffix (e.g. postgresql+psycopg://) — strip
+    # it down to a plain libpq DSN.
+    conn_str = conn_str.replace("postgresql+psycopg://", "postgresql://")
+
+    # from_conn_string is a contextmanager as of langgraph-checkpoint-postgres 3.x.
+    # Entered manually (never exited) since the returned saver is cached for the
+    # worker process's lifetime by tasks._get_graph().
+    cm = PostgresSaver.from_conn_string(conn_str)
+    saver = cm.__enter__()
+    _open_contexts.append(cm)
     saver.setup()
     return saver
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from celery.utils.log import get_task_logger
+from langgraph.types import Command
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -51,8 +52,27 @@ def run_application_step(self, application_id: int, event: dict[str, Any]) -> di
     try:
         graph = _get_graph()
         config = {"configurable": {"thread_id": str(application_id)}}
-        initial_state = {"application_id": application_id, "stage": "RECEIVED", "attempt": 1}
-        result = graph.invoke({**initial_state, **event}, config=config)
+
+        snapshot = graph.get_state(config)
+        if snapshot.next:
+            # Thread is paused at a human gate (interrupt). Resume it with the
+            # recruiter decision carried in `event` rather than restarting from
+            # START — a fresh input dict would re-run every completed node and
+            # open a second gate.
+            result = graph.invoke(Command(resume=event), config=config)
+        elif snapshot.created_at is not None:
+            # Thread already ran to a terminal state. Re-invocation is a no-op;
+            # do not restart it (node bodies that write rows outside the
+            # idempotency ledger — gate creation, audit events — would duplicate).
+            return {
+                "application_id": application_id,
+                "final_stage": snapshot.values.get("stage"),
+            }
+        else:
+            # Fresh thread — start from the beginning.
+            initial_state = {"application_id": application_id, "stage": "RECEIVED", "attempt": 1}
+            result = graph.invoke({**initial_state, **event}, config=config)
+
         return {"application_id": application_id, "final_stage": result.get("stage")}
     except Exception as exc:
         logger.exception("Step failed for application %s", application_id)

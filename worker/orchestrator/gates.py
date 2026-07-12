@@ -45,16 +45,29 @@ def require_gate(
     gate_name: str,
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    row = NeedsAttention(
-        application_id=application_id,
-        reason="sensitive_gate",
-        gate=gate_name,
-        context=context or {},
-        status="open",
+    # LangGraph re-executes the whole node body on resume, so require_gate runs
+    # a second time after the recruiter's decision. Reuse the row created on the
+    # pre-interrupt pass rather than inserting a phantom duplicate — otherwise
+    # every completed gate leaves an orphaned status='open' row behind.
+    row = db.scalar(
+        select(NeedsAttention)
+        .where(
+            NeedsAttention.application_id == application_id,
+            NeedsAttention.gate == gate_name,
+        )
+        .order_by(NeedsAttention.created_at.desc())
     )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
+    if row is None:
+        row = NeedsAttention(
+            application_id=application_id,
+            reason="sensitive_gate",
+            gate=gate_name,
+            context=context or {},
+            status="open",
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
 
     decision: dict[str, Any] = interrupt(
         {
