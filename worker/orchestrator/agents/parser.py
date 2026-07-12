@@ -19,7 +19,7 @@ field faithfully.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app.gateway import llm_call
 
@@ -55,6 +55,32 @@ class CVData(BaseModel):
     )
     experiences: list[Experience] = Field(default_factory=list)
     education: list[Education] = Field(default_factory=list)
+
+    @field_validator("skills", "languages", mode="before")
+    @classmethod
+    def _flatten_str_list(cls, v: object) -> object:
+        """Coerce list-of-objects to list-of-strings.
+
+        The model sometimes returns e.g. ``{"name": "Arabic", "proficiency":
+        "Native"}`` for a language. Flatten each item to a bare string so the
+        richer shape does not fail validation.
+        """
+        if not isinstance(v, list):
+            return v
+        out: list[str] = []
+        for item in v:
+            if isinstance(item, dict):
+                value = (
+                    item.get("name")
+                    or item.get("language")
+                    or item.get("skill")
+                    or item.get("value")
+                    or next((x for x in item.values() if isinstance(x, str)), "")
+                )
+                out.append(str(value))
+            elif item is not None:
+                out.append(str(item))
+        return out
 
 
 class CVParseError(RuntimeError):
@@ -113,14 +139,19 @@ def parse_cv(raw_text: str, *, user_id: str | None = None) -> CVData:
     if not raw_text.strip():
         raise CVParseError("Empty CV text passed to parse_cv")
 
-    result: CVData = llm_call(
-        profile="extractor",
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": raw_text},
-        ],
-        schema=CVData,
-        user_id=user_id,
-        metadata={"agent": "A1", "prompt_version": PROMPT_VERSION},
-    )
+    try:
+        result: CVData = llm_call(
+            profile="extractor",
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": raw_text},
+            ],
+            schema=CVData,
+            user_id=user_id,
+            metadata={"agent": "A1", "prompt_version": PROMPT_VERSION},
+        )
+    except ValidationError as exc:
+        # Schema drift from the model is a parse failure, not a crash — the node
+        # routes the application to NEEDS_ATTENTION rather than retrying forever.
+        raise CVParseError(f"LLM output did not match CVData schema: {exc}") from exc
     return result

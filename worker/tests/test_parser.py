@@ -51,6 +51,29 @@ def test_parse_cv_rejects_empty_text():
         parse_cv("   ")
 
 
+def test_cvdata_flattens_language_objects():
+    # The model sometimes returns {"name": ..., "proficiency": ...} per language.
+    cv = CVData.model_validate(
+        {
+            "full_name": "X",
+            "languages": [{"name": "Arabic", "proficiency": "Native"}, "English"],
+            "skills": [{"skill": "Python"}, "SQL"],
+        }
+    )
+    assert cv.languages == ["Arabic", "English"]
+    assert cv.skills == ["Python", "SQL"]
+
+
+def test_parse_cv_wraps_schema_drift_as_parse_error(monkeypatch):
+    # Simulate the gateway raising a pydantic ValidationError on model output.
+    def boom(**_):
+        return CVData.model_validate({"experiences": "not-a-list"})
+
+    monkeypatch.setattr(parser_mod, "llm_call", boom)
+    with pytest.raises(CVParseError):
+        parse_cv("some cv text")
+
+
 def _seed_app(db_factory, payload: dict) -> int:
     with db_factory() as db:
         row = Application(job_id=1, candidate_ref="a@b.c", state="RECEIVED", payload=payload)
