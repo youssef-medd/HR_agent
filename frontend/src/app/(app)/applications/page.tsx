@@ -1,8 +1,8 @@
 import { UploadCvDialog } from "@/components/applications/upload-cv-dialog";
 import { PageHeader } from "@/components/shell/page-header";
 import { StateBadge } from "@/components/shell/state-badge";
-import { API_URL, type ApplicationSummary } from "@/lib/api/client";
-import { getSessionToken } from "@/lib/api/server";
+import { type ApplicationSummary } from "@/lib/api/client";
+import { apiGet } from "@/lib/api/server";
 import { APPLICATION_STATES, type ApplicationState } from "@/lib/mocks/types";
 
 export const metadata = { title: "Applications · Welyne HR" };
@@ -24,19 +24,8 @@ const PIPELINE: ApplicationState[] = [
   "DECLINED",
 ];
 
-async function fetchApplications(): Promise<ApplicationSummary[]> {
-  const token = await getSessionToken();
-  if (!token) return [];
-  const res = await fetch(`${API_URL}/applications`, {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store",
-  });
-  if (!res.ok) return [];
-  return (await res.json()) as ApplicationSummary[];
-}
-
 export default async function ApplicationsPage() {
-  const apps = await fetchApplications();
+  const apps = await apiGet<ApplicationSummary[]>("/applications", []);
 
   const byState = new Map<ApplicationState, ApplicationSummary[]>();
   for (const state of APPLICATION_STATES) byState.set(state, []);

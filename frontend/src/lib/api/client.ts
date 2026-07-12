@@ -74,6 +74,18 @@ export interface ApplicationSummary {
   created_at: string;
 }
 
+export interface AttentionItem {
+  id: number;
+  application_id: number;
+  candidate_ref: string | null;
+  full_name: string | null;
+  reason: string;
+  gate: string | null;
+  context: Record<string, unknown>;
+  status: string;
+  created_at: string;
+}
+
 export const API_URL = process.env.API_URL ?? "http://localhost:8000";
 
 export const SESSION_COOKIE = "welyne_session";

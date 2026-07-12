@@ -37,3 +37,19 @@ export async function getSessionToken(): Promise<string | null> {
   const jar = await cookies();
   return jar.get(SESSION_COOKIE)?.value ?? null;
 }
+
+/** Authenticated server-side GET against the FastAPI backend. Returns `fallback` on any failure. */
+export async function apiGet<T>(path: string, fallback: T): Promise<T> {
+  const token = await getSessionToken();
+  if (!token) return fallback;
+  try {
+    const res = await fetch(`${API_URL}${path}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return fallback;
+    return (await res.json()) as T;
+  } catch {
+    return fallback;
+  }
+}

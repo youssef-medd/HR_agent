@@ -19,11 +19,11 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { title: "Overview", href: "/", icon: LayoutDashboard, mock: true },
-  { title: "Candidates", href: "/candidates", icon: Users, mock: true },
-  { title: "Jobs", href: "/jobs", icon: Briefcase, mock: true },
-  { title: "Applications", href: "/applications", icon: GitBranch, mock: true },
-  { title: "Needs attention", href: "/attention", icon: BellRing, mock: true },
+  { title: "Overview", href: "/", icon: LayoutDashboard },
+  { title: "Candidates", href: "/candidates", icon: Users },
+  { title: "Jobs", href: "/jobs", icon: Briefcase },
+  { title: "Applications", href: "/applications", icon: GitBranch },
+  { title: "Needs attention", href: "/attention", icon: BellRing },
   {
     title: "Chat",
     href: "/chat",

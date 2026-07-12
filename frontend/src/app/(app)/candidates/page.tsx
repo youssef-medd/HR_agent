@@ -8,79 +8,63 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { mockCandidates } from "@/lib/mocks/data";
+import { type ApplicationSummary } from "@/lib/api/client";
+import { apiGet } from "@/lib/api/server";
+import { type ApplicationState } from "@/lib/mocks/types";
 
 export const metadata = { title: "Candidates · Welyne HR" };
+export const dynamic = "force-dynamic";
 
-function ScoreCell({ score }: { score: number | null }) {
-  if (score === null) {
-    return <span className="text-muted-foreground font-mono text-xs">—</span>;
-  }
-  return (
-    <span className="flex items-center gap-2">
-      <span className="bg-muted relative h-1 w-14 overflow-hidden">
-        <span
-          className={`absolute inset-y-0 left-0 ${
-            score >= 75 ? "bg-primary" : "bg-muted-foreground"
-          }`}
-          style={{ width: `${score}%` }}
-        />
-      </span>
-      <span className="font-mono text-xs">{score}</span>
-    </span>
-  );
-}
-
-export default function CandidatesPage() {
-  const sorted = [...mockCandidates].sort(
-    (a, b) => (b.score ?? -1) - (a.score ?? -1)
-  );
+export default async function CandidatesPage() {
+  const apps = await apiGet<ApplicationSummary[]>("/applications", []);
 
   return (
     <>
       <PageHeader
         eyebrow="Candidates"
-        title={`${mockCandidates.length} candidates`}
-        description="Scores are produced by the masked judge model — identity attributes are never visible to it."
+        title={`${apps.length} ${apps.length === 1 ? "candidate" : "candidates"}`}
+        description="Scores are produced by the masked judge model (A4) — not yet wired, so the score column is empty until scoring lands."
       />
 
-      <div className="overflow-x-auto border">
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead className="eyebrow h-11">Candidate</TableHead>
-              <TableHead className="eyebrow h-11">Applied for</TableHead>
-              <TableHead className="eyebrow h-11">Score</TableHead>
-              <TableHead className="eyebrow h-11">Stage</TableHead>
-              <TableHead className="eyebrow h-11">Source</TableHead>
-              <TableHead className="eyebrow h-11 text-right">Applied</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {sorted.map((c) => (
-              <TableRow key={c.ref}>
-                <TableCell>
-                  <p className="font-medium">{c.fullName}</p>
-                  <p className="text-muted-foreground text-xs">{c.location}</p>
-                </TableCell>
-                <TableCell className="text-sm">{c.jobTitle}</TableCell>
-                <TableCell>
-                  <ScoreCell score={c.score} />
-                </TableCell>
-                <TableCell>
-                  <StateBadge state={c.state} />
-                </TableCell>
-                <TableCell className="text-muted-foreground text-sm">
-                  {c.source}
-                </TableCell>
-                <TableCell className="text-muted-foreground text-right font-mono text-xs">
-                  {c.appliedAt}
-                </TableCell>
+      {apps.length === 0 ? (
+        <div className="text-muted-foreground border border-dashed px-6 py-16 text-center text-sm">
+          No candidates yet. Upload a CV from the Applications page.
+        </div>
+      ) : (
+        <div className="overflow-x-auto border">
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="eyebrow h-11">Candidate</TableHead>
+                <TableHead className="eyebrow h-11">Applied for</TableHead>
+                <TableHead className="eyebrow h-11">Score</TableHead>
+                <TableHead className="eyebrow h-11">Stage</TableHead>
+                <TableHead className="eyebrow h-11 text-right">Applied</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+            </TableHeader>
+            <TableBody>
+              {apps.map((c) => (
+                <TableRow key={c.id}>
+                  <TableCell>
+                    <p className="font-medium">{c.full_name || c.candidate_ref}</p>
+                    <p className="text-muted-foreground text-xs">#{c.id}</p>
+                  </TableCell>
+                  <TableCell className="text-sm">Job #{c.job_id}</TableCell>
+                  <TableCell>
+                    <span className="text-muted-foreground font-mono text-xs">—</span>
+                  </TableCell>
+                  <TableCell>
+                    <StateBadge state={c.state as ApplicationState} />
+                  </TableCell>
+                  <TableCell className="text-muted-foreground text-right font-mono text-xs">
+                    {c.created_at.slice(0, 10)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </>
   );
 }
