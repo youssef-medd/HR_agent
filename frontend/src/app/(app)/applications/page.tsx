@@ -1,3 +1,4 @@
+import { UploadCvDialog } from "@/components/applications/upload-cv-dialog";
 import { PageHeader } from "@/components/shell/page-header";
 import { StateBadge } from "@/components/shell/state-badge";
 import { mockApplications } from "@/lib/mocks/data";
@@ -34,7 +35,9 @@ export default function ApplicationsPage() {
         eyebrow="Applications"
         title="Pipeline"
         description="Each column is a state in the orchestrator's audited state machine. Illegal transitions are impossible by construction."
-      />
+      >
+        <UploadCvDialog />
+      </PageHeader>
 
       <div className="overflow-x-auto pb-4">
         <div className="flex min-w-max gap-px border bg-border">

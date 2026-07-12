@@ -25,6 +25,46 @@ export interface HelloResponse {
   reply: string;
 }
 
+export interface ApplicationCreated {
+  application_id: number;
+  state: string;
+}
+
+export interface CVExperience {
+  title: string;
+  company: string;
+  start: string;
+  end: string;
+  summary: string;
+}
+
+export interface CVEducation {
+  degree: string;
+  institution: string;
+  year: string;
+}
+
+export interface CVData {
+  full_name: string;
+  email: string;
+  phone: string;
+  location: string;
+  summary: string;
+  skills: string[];
+  languages: string[];
+  years_experience: number | null;
+  experiences: CVExperience[];
+  education: CVEducation[];
+}
+
+export interface ApplicationView {
+  id: number;
+  job_id: number;
+  candidate_ref: string;
+  state: string;
+  cv: CVData | null;
+}
+
 export const API_URL = process.env.API_URL ?? "http://localhost:8000";
 
 export const SESSION_COOKIE = "welyne_session";
