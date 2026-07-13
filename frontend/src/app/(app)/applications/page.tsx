@@ -44,25 +44,25 @@ export default async function ApplicationsPage() {
       </PageHeader>
 
       {stages.length === 0 ? (
-        <div className="text-muted-foreground border border-dashed px-6 py-16 text-center text-sm">
+        <div className="surface text-muted-foreground px-6 py-16 text-center text-sm">
           No applications yet. Use <span className="text-foreground">Upload CV</span> to add one.
         </div>
       ) : (
         <div className="overflow-x-auto pb-4">
-          <div className="flex min-w-max gap-px border bg-border">
+          <div className="flex min-w-max gap-4">
             {stages.map((state) => {
               const stageApps = byState.get(state) ?? [];
               return (
-                <div key={state} className="bg-background w-64 shrink-0">
-                  <div className="bg-card flex items-center justify-between border-b px-4 py-3">
+                <div key={state} className="surface w-72 shrink-0 p-3">
+                  <div className="flex items-center justify-between px-2 py-2">
                     <StateBadge state={state} />
-                    <span className="font-mono text-muted-foreground text-xs">
+                    <span className="bg-muted text-muted-foreground font-mono flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px]">
                       {stageApps.length}
                     </span>
                   </div>
-                  <div className="space-y-px bg-border">
+                  <div className="mt-1 space-y-2">
                     {stageApps.map((app) => (
-                      <div key={app.id} className="bg-card p-4">
+                      <div key={app.id} className="bg-muted/60 rounded-2xl p-4">
                         <p className="mb-0.5 text-sm font-medium">
                           {app.full_name || app.candidate_ref}
                         </p>

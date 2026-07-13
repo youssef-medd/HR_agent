@@ -17,7 +17,15 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { ApplicationCreated, ApplicationView } from "@/lib/api/client";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import type { ApplicationCreated, ApplicationView, JobView } from "@/lib/api/client";
 
 const ACCEPT = ".pdf,.docx,.txt,.md";
 
@@ -38,13 +46,33 @@ export function UploadCvDialog() {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [pending, setPending] = React.useState(false);
+  const [jobs, setJobs] = React.useState<JobView[]>([]);
+  const [jobId, setJobId] = React.useState<string>("");
+
+  React.useEffect(() => {
+    if (!open) return;
+    fetch("/api/jobs", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: JobView[]) => {
+        setJobs(rows);
+        if (rows.length > 0 && !jobId) setJobId(String(rows[0].id));
+      })
+      .catch(() => setJobs([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (pending) return;
 
+    if (!jobId) {
+      toast.error("Pick a job — create one on the Jobs page first");
+      return;
+    }
+
     const form = e.currentTarget;
     const data = new FormData(form);
+    data.set("job_id", jobId);
     const file = data.get("file") as File | null;
     if (!file || file.size === 0) {
       toast.error("Choose a CV file first");
@@ -100,12 +128,37 @@ export function UploadCvDialog() {
 
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
-              <Label htmlFor="job_id">Job ID</Label>
-              <Input id="job_id" name="job_id" type="number" defaultValue={1} min={1} required />
+              <Label>Job</Label>
+              <Select value={jobId} onValueChange={setJobId}>
+                <SelectTrigger>
+                  <SelectValue
+                    placeholder={jobs.length === 0 ? "No jobs — create one first" : "Pick a job"}
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {jobs.map((j) => (
+                    <SelectItem key={j.id} value={String(j.id)}>
+                      #{j.id} · {j.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-muted-foreground text-xs">
+                The job&apos;s stored description is used for scoring when the field below is empty.
+              </p>
             </div>
             <div className="grid gap-2">
               <Label htmlFor="candidate_ref">Candidate reference (optional)</Label>
               <Input id="candidate_ref" name="candidate_ref" placeholder="email or name" />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="job_description">Job description (optional)</Label>
+              <Textarea
+                id="job_description"
+                name="job_description"
+                rows={4}
+                placeholder="Paste the job description — the judge (A4) scores the CV against it. Empty = general strength score."
+              />
             </div>
             <div className="grid gap-2">
               <Label htmlFor="file">CV file</Label>

@@ -2,10 +2,12 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+@custom-variant dark (&:is(.dark *));
+
 /*
- * Welyne brand — dark-only theme.
- * Raw tokens extracted from welyne.com's production CSS bundle.
- * No light mode: the brand ships a single dark identity.
+ * Welyne HR console — light SaaS theme.
+ * Soft gray canvas, floating white rounded cards, pill navigation.
+ * Brand accent stays Welyne orange; fonts stay Outfit + JetBrains Mono.
  */
 
 @theme inline {
@@ -53,49 +55,69 @@
 }
 
 :root {
-  /* Welyne raw brand tokens */
-  --welyne-bg: #0b0a0a;
-  --welyne-bg2: #161311;
-  --welyne-bg3: #1c1815;
-  --welyne-black: #120f0d;
-  --welyne-muted: #8c837a;
+  /* Welyne brand */
   --welyne-orange: #ff6b00;
-  --welyne-on-orange: #120f0d;
-  --welyne-text: #ece5db;
+  --welyne-ink: #17181a;
+  --welyne-muted: #7b8089;
 
-  /* shadcn semantic tokens mapped onto the brand */
-  --background: var(--welyne-bg);
-  --foreground: var(--welyne-text);
-  --card: var(--welyne-bg2);
-  --card-foreground: var(--welyne-text);
-  --popover: var(--welyne-bg3);
-  --popover-foreground: var(--welyne-text);
+  /* shadcn semantic tokens — light surface system */
+  --background: #eceef0;
+  --foreground: var(--welyne-ink);
+  --card: #ffffff;
+  --card-foreground: var(--welyne-ink);
+  --popover: #ffffff;
+  --popover-foreground: var(--welyne-ink);
   --primary: var(--welyne-orange);
-  --primary-foreground: var(--welyne-on-orange);
-  --secondary: var(--welyne-bg3);
-  --secondary-foreground: var(--welyne-text);
-  --muted: var(--welyne-bg3);
+  --primary-foreground: #ffffff;
+  --secondary: #f3f4f6;
+  --secondary-foreground: var(--welyne-ink);
+  --muted: #f3f4f6;
   --muted-foreground: var(--welyne-muted);
-  --accent: var(--welyne-bg3);
-  --accent-foreground: var(--welyne-text);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: color-mix(in oklab, white 9%, transparent);
-  --input: color-mix(in oklab, white 12%, transparent);
+  --accent: #f6f7f8;
+  --accent-foreground: var(--welyne-ink);
+  --destructive: #e5484d;
+  --border: #e8eaed;
+  --input: #e4e6ea;
   --ring: var(--welyne-orange);
   --chart-1: var(--welyne-orange);
-  --chart-2: var(--welyne-text);
+  --chart-2: var(--welyne-ink);
   --chart-3: var(--welyne-muted);
   --chart-4: #a85a1e;
-  --chart-5: #5c5148;
-  --radius: 0.375rem;
-  --sidebar: var(--welyne-bg2);
-  --sidebar-foreground: var(--welyne-text);
+  --chart-5: #cfd3d8;
+  --radius: 1rem;
+  --sidebar: #ffffff;
+  --sidebar-foreground: var(--welyne-ink);
   --sidebar-primary: var(--welyne-orange);
-  --sidebar-primary-foreground: var(--welyne-on-orange);
-  --sidebar-accent: var(--welyne-bg3);
-  --sidebar-accent-foreground: var(--welyne-text);
-  --sidebar-border: color-mix(in oklab, white 8%, transparent);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f6f7f8;
+  --sidebar-accent-foreground: var(--welyne-ink);
+  --sidebar-border: #e8eaed;
   --sidebar-ring: var(--welyne-orange);
+}
+
+.dark {
+  --background: #0d0e10;
+  --foreground: #ecedee;
+  --card: #17181b;
+  --card-foreground: #ecedee;
+  --popover: #1c1d21;
+  --popover-foreground: #ecedee;
+  --primary: var(--welyne-orange);
+  --primary-foreground: #ffffff;
+  --secondary: #212226;
+  --secondary-foreground: #ecedee;
+  --muted: #212226;
+  --muted-foreground: #9a9fa8;
+  --accent: #232428;
+  --accent-foreground: #ecedee;
+  --destructive: #f2555a;
+  --border: rgba(255, 255, 255, 0.09);
+  --input: rgba(255, 255, 255, 0.12);
+  --sidebar: #17181b;
+  --sidebar-foreground: #ecedee;
+  --sidebar-accent: #232428;
+  --sidebar-accent-foreground: #ecedee;
+  --sidebar-border: rgba(255, 255, 255, 0.09);
 }
 
 @layer base {
@@ -104,6 +126,9 @@
   }
   html {
     @apply font-sans;
+    color-scheme: light;
+  }
+  html.dark {
     color-scheme: dark;
   }
   body {
@@ -113,20 +138,76 @@
   [role="button"]:not(:disabled) {
     cursor: pointer;
   }
+  /* Pill buttons across the console (screenshot language) */
+  [data-slot="button"] {
+    border-radius: 9999px;
+  }
   ::selection {
     background: var(--welyne-orange);
-    color: var(--welyne-on-orange);
+    color: #ffffff;
   }
 }
 
 @layer utilities {
-  /* Editorial mono eyebrow — the Welyne signature micro-label */
+  /* Quiet section label — small, medium weight, normal case */
   .eyebrow {
-    @apply font-mono text-[11px] font-medium uppercase;
-    letter-spacing: 0.16em;
+    @apply text-xs font-medium;
+    letter-spacing: 0.01em;
     color: var(--welyne-muted);
   }
   .eyebrow-accent {
     color: var(--welyne-orange);
+  }
+  /* Floating card surface */
+  .surface {
+    @apply bg-card rounded-3xl;
+    box-shadow:
+      0 1px 2px rgba(16, 24, 40, 0.04),
+      0 8px 24px rgba(16, 24, 40, 0.06);
+  }
+  .dark .surface {
+    @apply border border-white/5;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  }
+  /* Accent gradient tile (the big green card in the reference, in Welyne orange) */
+  .surface-accent {
+    @apply text-primary-foreground rounded-3xl;
+    background: linear-gradient(150deg, #ff8a33 0%, #ff6b00 55%, #f05e00 100%);
+    box-shadow:
+      0 1px 2px rgba(240, 94, 0, 0.2),
+      0 12px 28px rgba(240, 94, 0, 0.28);
+  }
+  /* Rounded-full status chip base */
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium;
+  }
+
+  /* Cinematic ambient glow — slow drifting radial blobs behind the console */
+  .ambient-blob {
+    position: absolute;
+    border-radius: 9999px;
+    filter: blur(90px);
+    will-change: transform;
+    animation: ambient-drift 26s ease-in-out infinite alternate;
+  }
+  .ambient-blob-2 {
+    animation-duration: 34s;
+    animation-direction: alternate-reverse;
+  }
+  @keyframes ambient-drift {
+    0% {
+      transform: translate3d(-6%, -4%, 0) scale(1);
+    }
+    50% {
+      transform: translate3d(4%, 6%, 0) scale(1.12);
+    }
+    100% {
+      transform: translate3d(8%, -6%, 0) scale(0.96);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ambient-blob {
+      animation: none;
+    }
   }
 }

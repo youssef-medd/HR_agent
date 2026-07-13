@@ -17,14 +17,6 @@ export interface MeResponse {
   role: Role;
 }
 
-export interface HelloRequest {
-  prompt: string;
-}
-
-export interface HelloResponse {
-  reply: string;
-}
-
 export interface ApplicationCreated {
   application_id: number;
   state: string;
@@ -71,7 +63,21 @@ export interface ApplicationSummary {
   candidate_ref: string;
   state: string;
   full_name: string | null;
+  score: number | null;
+  recommendation: string | null;
   created_at: string;
+}
+
+export interface JobView {
+  id: number;
+  title: string;
+  department: string | null;
+  location: string | null;
+  description: string;
+  status: string;
+  created_at: string;
+  applicants: number;
+  shortlisted: number;
 }
 
 export interface AttentionItem {

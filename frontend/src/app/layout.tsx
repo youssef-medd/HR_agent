@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
-import { Outfit, JetBrains_Mono } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
+import { ThemeProvider } from "next-themes";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
-const outfit = Outfit({
+const inter = Inter({
   variable: "--font-outfit",
   subsets: ["latin"],
 });
@@ -25,10 +26,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className={`${outfit.variable} ${jetbrainsMono.variable}`}>
-        {children}
-        <Toaster position="bottom-right" />
+    <html lang="en" suppressHydrationWarning>
+      <body className={`${inter.variable} ${jetbrainsMono.variable}`}>
+        <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
+          {children}
+          <Toaster position="bottom-right" />
+        </ThemeProvider>
       </body>
     </html>
   );
