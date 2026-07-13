@@ -73,11 +73,19 @@ def _run_batch(db_factory, saver, ids: list[int]) -> None:
 
 
 def test_kill_midbatch_restart_zero_duplicates(db_factory, monkeypatch):
-    # A1 runs inside parse_node; stub it so the orchestration test stays offline.
+    # A1/A4 run inside the nodes; stub them so the orchestration test stays offline.
     from orchestrator import nodes
+    from orchestrator.agents.scorer import ScoreResult
 
     monkeypatch.setattr(
         nodes, "parse_cv", lambda text, **_: CVData(full_name="Candidate", skills=["Python"])
+    )
+    # decline recommendation keeps the batch flowing through the rejection gate,
+    # which is what this test exercises across kill/restart.
+    monkeypatch.setattr(
+        nodes,
+        "score_candidate",
+        lambda masked, jd, **_: ScoreResult(overall=20, recommendation="decline"),
     )
 
     _sent_log_reset()

@@ -1,0 +1,141 @@
+"""A4 scoring tests — offline (the judge gateway is monkeypatched).
+
+Covers the identity-blind masking (incl. the identity-swap invariance that
+underpins the bias probe, ADR-005), the score_candidate gateway call, and both
+score_node branches.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app.models.application import Application
+from orchestrator.agents import scorer as scorer_mod
+from orchestrator.agents.masking import mask_cv
+from orchestrator.agents.parser import CVData
+from orchestrator.agents.scorer import ScoreError, ScoreResult, score_candidate
+
+
+def _cv(**over) -> CVData:
+    base = dict(
+        full_name="Jane Doe",
+        email="jane@example.com",
+        phone="+216 20 000 000",
+        location="Tunis",
+        summary="Backend engineer",
+        skills=["Python", "SQL"],
+        languages=["English"],
+        years_experience=5.0,
+        experiences=[{"title": "Dev", "company": "Acme", "start": "2019", "end": "2024", "summary": "APIs"}],
+        education=[{"degree": "BSc CS", "institution": "INSAT", "year": "2018"}],
+    )
+    base.update(over)
+    return CVData.model_validate(base)
+
+
+def test_mask_drops_identity_fields():
+    masked = mask_cv(_cv())
+    flat = str(masked)
+    assert "Jane Doe" not in flat
+    assert "jane@example.com" not in flat
+    assert "+216 20 000 000" not in flat
+    assert "Tunis" not in flat
+    assert "INSAT" not in flat  # institution redacted
+    assert masked["skills"] == ["Python", "SQL"]  # signal kept
+
+
+def test_mask_is_identity_swap_invariant():
+    # Two CVs differing ONLY in identity fields must mask to the same view.
+    a = mask_cv(_cv(full_name="Jane Doe", email="jane@x.com", location="Tunis"))
+    b = mask_cv(_cv(full_name="John Smith", email="john@y.com", location="Berlin"))
+    assert a == b
+
+
+def test_score_candidate_uses_judge_profile(monkeypatch):
+    captured: dict = {}
+
+    def fake_llm_call(*, profile, messages, schema, user_id=None, metadata=None, **_):
+        captured.update(profile=profile, schema=schema, metadata=metadata)
+        return ScoreResult(
+            overall=1, skills_match=90, experience_match=80, education_match=60,
+            recommendation="decline",
+        )
+
+    monkeypatch.setattr(scorer_mod, "llm_call", fake_llm_call)
+
+    result = score_candidate({"skills": ["Python"]}, "Backend role", user_id="7")
+
+    assert isinstance(result, ScoreResult)
+    # overall + recommendation recomputed deterministically: .5*90+.35*80+.15*60 = 82
+    assert result.overall == 82
+    assert result.recommendation == "shortlist"
+    assert captured["profile"] == "judge"
+    assert captured["schema"] is ScoreResult
+    assert captured["metadata"]["agent"] == "A4"
+
+
+def test_finalize_weighted_bands():
+    from orchestrator.agents.scorer import _finalize
+
+    # pool band: .5*60+.35*50+.15*40 = 53.5 -> 54
+    mid = _finalize(ScoreResult(overall=0, skills_match=60, experience_match=50, education_match=40))
+    assert mid.overall == 54 and mid.recommendation == "pool"
+
+    # decline band
+    low = _finalize(ScoreResult(overall=99, skills_match=20, experience_match=10, education_match=0))
+    assert low.overall == 14 and low.recommendation == "decline"
+
+
+def test_score_candidate_wraps_validation_error(monkeypatch):
+    def boom(**_):
+        return ScoreResult.model_validate({"overall": 999})  # ge=0,le=100 -> error
+
+    monkeypatch.setattr(scorer_mod, "llm_call", boom)
+    with pytest.raises(ScoreError):
+        score_candidate({"skills": []}, "jd")
+
+
+def _seed(db_factory, payload: dict) -> int:
+    with db_factory() as db:
+        row = Application(job_id=1, candidate_ref="a@b.c", state="PARSED", payload=payload)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row.id
+
+
+def test_score_node_stores_score_and_advances(db_factory, monkeypatch):
+    from orchestrator import nodes
+
+    monkeypatch.setattr(
+        nodes,
+        "score_candidate",
+        lambda masked, jd, **_: ScoreResult(overall=77, recommendation="shortlist"),
+    )
+    app_id = _seed(db_factory, {"cv": {"full_name": "Jane", "skills": ["Python"]}, "jd_text": "Backend"})
+
+    with db_factory() as db:
+        state = nodes.score_node(db, {"application_id": app_id, "stage": "PARSED", "attempt": 1})
+
+    assert state["stage"] == "SCORED"
+    with db_factory() as db:
+        row = db.get(Application, app_id)
+        assert row.state == "SCORED"
+        assert row.payload["score"]["overall"] == 77
+
+
+def test_score_node_routes_to_needs_attention_on_error(db_factory, monkeypatch):
+    from orchestrator import nodes
+
+    def boom(masked, jd, **_):
+        raise ScoreError("judge broke")
+
+    monkeypatch.setattr(nodes, "score_candidate", boom)
+    app_id = _seed(db_factory, {"cv": {"skills": ["Python"]}})
+
+    with db_factory() as db:
+        state = nodes.score_node(db, {"application_id": app_id, "stage": "PARSED", "attempt": 1})
+
+    assert state["stage"] == "NEEDS_ATTENTION"
+    with db_factory() as db:
+        assert db.get(Application, app_id).state == "NEEDS_ATTENTION"

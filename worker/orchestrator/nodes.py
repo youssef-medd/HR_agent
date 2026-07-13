@@ -19,7 +19,9 @@ from sqlalchemy.orm import Session
 
 from app.models.application import Application
 from app.models.application_event import ApplicationEvent
-from orchestrator.agents.parser import CVParseError, extract_text, parse_cv
+from orchestrator.agents.masking import mask_cv
+from orchestrator.agents.parser import CVData, CVParseError, extract_text, parse_cv
+from orchestrator.agents.scorer import ScoreError, score_candidate
 from orchestrator.gates import execute_after_rejection_gate, require_gate
 from orchestrator.idempotency import with_ledger
 from orchestrator.side_effects import _send_confirmation_impl
@@ -114,12 +116,46 @@ def parse_node(db: Session, state: NodeState) -> NodeState:
 
 
 def score_node(db: Session, state: NodeState) -> NodeState:
-    def _work() -> dict[str, Any]:
-        return {"score": 0.0}
+    """A4 — score the masked CV against the job description. NEEDS_ATTENTION on failure."""
+    app_row = db.get(Application, state["application_id"])
+    payload = dict(app_row.payload) if app_row is not None else {}
 
-    result = with_ledger(db, state["application_id"], "score", state.get("attempt", 1), _work)
-    state.setdefault("scratch", {})["score"] = result.get("score", 0.0)
+    def _work() -> dict[str, Any]:
+        cv = CVData.model_validate(payload.get("cv") or {})
+        masked = mask_cv(cv)
+        result = score_candidate(
+            masked, payload.get("jd_text"), user_id=str(state["application_id"])
+        )
+        return result.model_dump()
+
+    try:
+        score = with_ledger(db, state["application_id"], "score", state.get("attempt", 1), _work)
+    except ScoreError as exc:
+        db.add(
+            ApplicationEvent(
+                application_id=state["application_id"],
+                kind="score_failed",
+                step="score",
+                attempt=state.get("attempt", 1),
+                payload={"error": str(exc)},
+            )
+        )
+        return _advance(db, state, State.NEEDS_ATTENTION, "score_failed")
+
+    if app_row is not None:
+        app_row.payload = {**app_row.payload, "score": score}
+    scratch = state.setdefault("scratch", {})
+    scratch["score"] = score.get("overall", 0)
+    scratch["recommendation"] = score.get("recommendation", "pool")
     return _advance(db, state, State.SCORED, "score")
+
+
+def shortlisted_node(db: Session, state: NodeState) -> NodeState:
+    return _advance(db, state, State.SHORTLISTED, "shortlisted")
+
+
+def pool_node(db: Session, state: NodeState) -> NodeState:
+    return _advance(db, state, State.POOL, "pool")
 
 
 def send_confirmation_node(db: Session, state: NodeState) -> NodeState:

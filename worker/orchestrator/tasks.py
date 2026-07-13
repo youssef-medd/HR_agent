@@ -53,14 +53,21 @@ def run_application_step(self, application_id: int, event: dict[str, Any]) -> di
         graph = _get_graph()
         config = {"configurable": {"thread_id": str(application_id)}}
 
+        # The application row is the source of truth; the checkpointer only
+        # holds resumable execution state. A checkpoint that contradicts a
+        # fresh DB row (e.g. after a data reset reused ids) is stale.
+        with _db_factory() as db:
+            app_row = db.get(Application, application_id)
+            db_state = app_row.state if app_row is not None else None
+
         snapshot = graph.get_state(config)
-        if snapshot.next:
+        if snapshot.next and db_state not in ("RECEIVED", None):
             # Thread is paused at a human gate (interrupt). Resume it with the
             # recruiter decision carried in `event` rather than restarting from
             # START — a fresh input dict would re-run every completed node and
             # open a second gate.
             result = graph.invoke(Command(resume=event), config=config)
-        elif snapshot.created_at is not None:
+        elif snapshot.created_at is not None and db_state not in ("RECEIVED", None):
             # Thread already ran to a terminal state. Re-invocation is a no-op;
             # do not restart it (node bodies that write rows outside the
             # idempotency ledger — gate creation, audit events — would duplicate).
@@ -69,7 +76,14 @@ def run_application_step(self, application_id: int, event: dict[str, Any]) -> di
                 "final_stage": snapshot.values.get("stage"),
             }
         else:
-            # Fresh thread — start from the beginning.
+            # Fresh application (or stale checkpoint from a reused id) — start
+            # from the beginning; invoking with fresh input restarts the thread.
+            if snapshot.created_at is not None:
+                logger.warning(
+                    "Stale checkpoint for application %s (db_state=%s) — restarting thread",
+                    application_id,
+                    db_state,
+                )
             initial_state = {"application_id": application_id, "stage": "RECEIVED", "attempt": 1}
             result = graph.invoke({**initial_state, **event}, config=config)
 
