@@ -57,3 +57,45 @@ def test_needs_attention_lists_open_gate_with_candidate_name(client, auth_header
     assert rows[0]["gate"] == "rejection"
     assert rows[0]["status"] == "open"
     assert rows[0]["full_name"] == "Jane Doe"
+
+
+def test_resolve_gate_closes_row_and_enqueues(client, auth_header, monkeypatch):
+    from app.db import get_db
+    from app.models.application import Application
+    from app.models.needs_attention import NeedsAttention
+    from app.routers import attention as attention_router
+
+    enqueued: list[tuple] = []
+    monkeypatch.setattr(
+        attention_router, "enqueue_application_step", lambda *a, **k: enqueued.append(a)
+    )
+
+    db_gen = client.app.dependency_overrides[get_db]()
+    db = next(db_gen)
+    try:
+        app_row = Application(job_id=1, candidate_ref="c@x.y", state="DECLINE_PENDING", payload={})
+        db.add(app_row)
+        db.commit()
+        db.refresh(app_row)
+        gate = NeedsAttention(
+            application_id=app_row.id, reason="sensitive_gate", gate="rejection", status="open"
+        )
+        db.add(gate)
+        db.commit()
+        db.refresh(gate)
+        gate_id, app_id = gate.id, app_row.id
+    finally:
+        db.close()
+
+    resp = client.post(
+        f"/needs-attention/{gate_id}/resolve", json={"decision": "approve"}, headers=auth_header
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "closed"
+    assert enqueued == [(app_id, {"decision": "approve"})]
+
+    # second resolve refused
+    again = client.post(
+        f"/needs-attention/{gate_id}/resolve", json={"decision": "approve"}, headers=auth_header
+    )
+    assert again.status_code == 409

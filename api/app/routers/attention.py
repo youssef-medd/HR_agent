@@ -1,15 +1,18 @@
 """Needs-attention (human gate) queue endpoints.
 
-Read-only for now: lists the open and resolved gate items with the candidate
-name resolved from the linked application. The resolution endpoints (approve /
-reject a gate, resuming the orchestrator thread) land with sprint 3.
+Lists the open/resolved gate items with the candidate name resolved from the
+linked application, and records recruiter decisions. Resolving a gate closes
+the row (the audit surface `orchestrator.gates._assert_approved` checks) and
+enqueues the orchestrator step so the paused LangGraph thread resumes with the
+decision.
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from datetime import UTC, datetime
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,6 +21,7 @@ from app.db import get_db
 from app.models.application import Application
 from app.models.needs_attention import NeedsAttention
 from app.models.user import User
+from app.queue import enqueue_application_step
 from app.security import require_role
 
 router = APIRouter(prefix="/needs-attention", tags=["needs-attention"])
@@ -69,3 +73,45 @@ def list_needs_attention(
             )
         )
     return items
+
+
+class ResolveRequest(BaseModel):
+    decision: Literal["approve", "reject"]
+
+
+class ResolveResponse(BaseModel):
+    id: int
+    application_id: int
+    status: str
+    decision: str
+
+
+@router.post("/{item_id}/resolve", response_model=ResolveResponse)
+def resolve_gate(
+    item_id: int,
+    body: ResolveRequest,
+    user: Annotated[User, Depends(require_role("admin", "recruiter"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ResolveResponse:
+    row = db.get(NeedsAttention, item_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    if row.status != "open":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Already resolved")
+
+    row.status = "closed"
+    row.resolved_by = user.email
+    row.resolution = {"decision": body.decision}
+    row.resolved_at = datetime.now(UTC)
+    db.commit()
+
+    # Resume the paused orchestrator thread with the recruiter's decision.
+    if row.gate:
+        enqueue_application_step(row.application_id, {"decision": body.decision})
+
+    return ResolveResponse(
+        id=row.id,
+        application_id=row.application_id,
+        status=row.status,
+        decision=body.decision,
+    )

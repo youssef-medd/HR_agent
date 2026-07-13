@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.application import Application
+from app.models.job import Job
 from app.models.user import User
 from app.queue import enqueue_application_step
 from app.security import require_role
@@ -48,6 +49,8 @@ class ApplicationSummary(BaseModel):
     candidate_ref: str
     state: str
     full_name: str | None = None
+    score: int | None = None
+    recommendation: str | None = None
     created_at: str
 
 
@@ -58,6 +61,7 @@ async def create_application(
     job_id: Annotated[int, Form()],
     file: Annotated[UploadFile, File()],
     candidate_ref: Annotated[str | None, Form()] = None,
+    job_description: Annotated[str | None, Form()] = None,
 ) -> ApplicationCreated:
     filename = file.filename or "cv"
     if not filename.lower().endswith(_ALLOWED_EXT):
@@ -75,6 +79,14 @@ async def create_application(
             detail=f"File exceeds {_MAX_BYTES // (1024 * 1024)} MB",
         )
 
+    # Explicit job_description wins; otherwise inherit the job posting's text
+    # so A4 scores against the stored requirements.
+    jd_text = job_description
+    if not jd_text:
+        job = db.get(Job, job_id)
+        if job is not None and job.description:
+            jd_text = job.description
+
     row = Application(
         job_id=job_id,
         candidate_ref=candidate_ref or filename,
@@ -82,6 +94,7 @@ async def create_application(
         payload={
             "cv_filename": filename,
             "cv_b64": base64.b64encode(data).decode("ascii"),
+            **({"jd_text": jd_text} if jd_text else {}),
         },
     )
     db.add(row)
@@ -106,6 +119,8 @@ def list_applications(
             candidate_ref=r.candidate_ref,
             state=r.state,
             full_name=(r.payload.get("cv") or {}).get("full_name") or None,
+            score=(r.payload.get("score") or {}).get("overall"),
+            recommendation=(r.payload.get("score") or {}).get("recommendation"),
             created_at=r.created_at.isoformat(),
         )
         for r in rows

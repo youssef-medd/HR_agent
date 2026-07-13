@@ -85,7 +85,19 @@ def test_list_applications_returns_uploaded(client, auth_header, _stub_enqueue):
     resp = client.get("/applications", headers=auth_header)
     assert resp.status_code == 200
     rows = resp.json()
-    assert any(r["candidate_ref"] == "list-me@example.com" and r["state"] == "RECEIVED" for r in rows)
+    row = next(r for r in rows if r["candidate_ref"] == "list-me@example.com")
+    assert row["state"] == "RECEIVED"
+    assert row["score"] is None  # not scored yet
+
+
+def test_upload_accepts_job_description(client, auth_header, _stub_enqueue):
+    resp = client.post(
+        "/applications",
+        data={"job_id": "3", "candidate_ref": "jd@example.com", "job_description": "Senior Python role"},
+        files={"file": ("cv.txt", b"Jane Doe", "text/plain")},
+        headers=auth_header,
+    )
+    assert resp.status_code == 201
 
 
 def test_enqueue_targets_named_task():

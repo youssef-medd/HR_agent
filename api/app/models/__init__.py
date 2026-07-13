@@ -10,6 +10,7 @@ from app.models.application import Application
 from app.models.application_event import ApplicationEvent
 from app.models.audit_log import AuditLog
 from app.models.idempotency_ledger import IdempotencyLedger
+from app.models.job import Job
 from app.models.needs_attention import NeedsAttention
 from app.models.user import User
 
@@ -18,6 +19,7 @@ __all__ = [
     "ApplicationEvent",
     "AuditLog",
     "IdempotencyLedger",
+    "Job",
     "NeedsAttention",
     "User",
 ]
