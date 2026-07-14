@@ -13,18 +13,27 @@ work goes through `orchestrator.gates`.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any, TypedDict
 
+from langgraph.types import interrupt
 from sqlalchemy.orm import Session
 
 from app.models.application import Application
 from app.models.application_event import ApplicationEvent
 from orchestrator.agents.masking import mask_cv
 from orchestrator.agents.parser import CVData, CVParseError, extract_text, parse_cv
+from orchestrator.agents.prescreen import (
+    CONSENT_PROMPT,
+    PrescreenError,
+    interpret_answer,
+    interpret_consent,
+    screening_questions,
+)
 from orchestrator.agents.scorer import ScoreError, score_candidate
 from orchestrator.gates import execute_after_rejection_gate, require_gate
 from orchestrator.idempotency import with_ledger
-from orchestrator.side_effects import _send_confirmation_impl
+from orchestrator.side_effects import _send_confirmation_impl, _send_whatsapp_impl
 from orchestrator.state_machine import State, transition
 
 
@@ -196,3 +205,120 @@ def declined_node(db: Session, state: NodeState) -> NodeState:
         return _advance(db, state, State.DECLINED, "declined")
 
     return _advance(db, state, State.NEEDS_ATTENTION, "declined_rejected_by_human")
+
+
+def _candidate_message(resume: Any) -> str:
+    """Pull the candidate's text out of the resume event fed by the reply path."""
+    if isinstance(resume, dict):
+        return str(resume.get("candidate_message", ""))
+    return str(resume)
+
+
+def _save_prescreen(db: Session, application_id: int, block: dict[str, Any]) -> None:
+    row = db.get(Application, application_id)
+    if row is not None:
+        row.payload = {**row.payload, "prescreen": block}
+        db.commit()
+
+
+def prescreen_node(db: Session, state: NodeState) -> NodeState:
+    """A5 — WhatsApp conversational pre-screening.
+
+    Multi-turn: each candidate reply arrives as a separate resume, so this body
+    re-executes top-to-bottom on every turn. Two invariants make the replay
+    safe:
+
+    - The transition into PRESCREENING is guarded on the *DB row* state (the
+      source of truth), never on `state["stage"]` — LangGraph replays the node
+      from its checkpointed input (`SHORTLISTED`) each time, so a state-based
+      guard would re-fire the transition on every turn.
+    - The `interrupt()` sequence is deterministic — consent, then one per
+      question in order — so LangGraph feeds resume values back positionally.
+      Sends go through the ledger (exactly-once); answers are rebuilt from the
+      resume values, with first-seen timestamps reused from the persisted block.
+    """
+    app_id = state["application_id"]
+    attempt = state.get("attempt", 1)
+    app_row = db.get(Application, app_id)
+    payload = dict(app_row.payload) if app_row is not None else {}
+    recipient = app_row.candidate_ref if app_row is not None else "unknown"
+
+    # Keep the in-memory stage in lockstep with the DB so the final transition is
+    # computed from the real current state on the completing replay.
+    if app_row is not None:
+        state["stage"] = app_row.state
+
+    # First entry only: SHORTLISTED -> PRESCREENING. Skipped on every replay
+    # because the DB row is already PRESCREENING by then.
+    if State(state["stage"]) == State.SHORTLISTED:
+        _advance(db, state, State.PRESCREENING, "prescreen_start")
+
+    block: dict[str, Any] = dict(payload.get("prescreen") or {})
+    prior_answers: list[dict[str, Any]] = list(block.get("answers") or [])
+    questions = screening_questions(payload)
+
+    # --- Consent turn -------------------------------------------------------
+    with_ledger(
+        db, app_id, "prescreen_consent", attempt,
+        lambda: _send_whatsapp_impl(app_id, recipient, CONSENT_PROMPT),
+    )
+    consent_reply = _candidate_message(
+        interrupt({"kind": "await_candidate_reply", "stage": "consent", "application_id": app_id})
+    )
+    try:
+        consent = interpret_consent(consent_reply, user_id=str(app_id))
+    except PrescreenError as exc:
+        block["status"] = "no_consent"
+        block.setdefault("consent", {})["given"] = None
+        _save_prescreen(db, app_id, block)
+        db.add(ApplicationEvent(
+            application_id=app_id, kind="prescreen_failed", step="prescreen_consent",
+            attempt=attempt, payload={"error": str(exc)},
+        ))
+        return _advance(db, state, State.NEEDS_ATTENTION, "prescreen_no_consent")
+
+    if not consent.consent:
+        block["status"] = "no_consent"
+        block["consent"] = {"given": False, "at": None}
+        _save_prescreen(db, app_id, block)
+        return _advance(db, state, State.NEEDS_ATTENTION, "prescreen_no_consent")
+
+    consent_at = (block.get("consent") or {}).get("at") or datetime.now(UTC).isoformat()
+    block["consent"] = {"given": True, "at": consent_at}
+    block["status"] = "asking"
+    _save_prescreen(db, app_id, block)
+
+    # --- Question turns -----------------------------------------------------
+    answers: list[dict[str, Any]] = []
+    for i, question in enumerate(questions):
+        with_ledger(
+            db, app_id, f"prescreen_q{i}", attempt,
+            lambda q=question: _send_whatsapp_impl(app_id, recipient, q),
+        )
+        reply = _candidate_message(
+            interrupt({
+                "kind": "await_candidate_reply", "stage": "question",
+                "idx": i, "application_id": app_id,
+            })
+        )
+        try:
+            interp = interpret_answer(question, reply, user_id=str(app_id))
+        except PrescreenError as exc:
+            block["answers"] = answers
+            block["status"] = "error"
+            _save_prescreen(db, app_id, block)
+            db.add(ApplicationEvent(
+                application_id=app_id, kind="prescreen_failed", step=f"prescreen_q{i}",
+                attempt=attempt, payload={"error": str(exc)},
+            ))
+            return _advance(db, state, State.NEEDS_ATTENTION, "prescreen_answer_failed")
+
+        answered_at = prior_answers[i]["at"] if i < len(prior_answers) else datetime.now(UTC).isoformat()
+        answers.append({"q": question, "a": interp.answer, "at": answered_at})
+        block["answers"] = answers
+        block["idx"] = i + 1
+        _save_prescreen(db, app_id, block)
+
+    block["status"] = "done"
+    _save_prescreen(db, app_id, block)
+    return _advance(db, state, State.PRESCREENED, "prescreen")

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 # In-memory sent log — swapped for the real senders in later slices.
 # Reset per test via the `_sent_log_reset` fixture.
 _SENT: list[dict[str, Any]] = []
@@ -62,5 +61,19 @@ def _send_confirmation_impl(application_id: int, recipient: str) -> dict[str, An
 
 def _publish_job_impl(job_id: int, board: str) -> dict[str, Any]:
     entry = {"kind": "publish", "job_id": job_id, "board": board}
+    _SENT.append(entry)
+    return entry
+
+
+def _send_whatsapp_impl(application_id: int, recipient: str, body: str) -> dict[str, Any]:
+    """A5 pre-screening message. Non-sensitive (no recruiter gate) — called from
+    `nodes.prescreen_node` through the idempotency ledger, like the confirmation
+    sender. The real Meta WhatsApp Cloud API transport plugs in here later."""
+    entry = {
+        "kind": "whatsapp",
+        "application_id": application_id,
+        "recipient": recipient,
+        "body": body,
+    }
     _SENT.append(entry)
     return entry

@@ -127,6 +127,42 @@ def list_applications(
     ]
 
 
+class PrescreenReply(BaseModel):
+    message: str
+
+
+class PrescreenReplyAccepted(BaseModel):
+    application_id: int
+    state: str
+
+
+@router.post("/{application_id}/prescreen/reply", response_model=PrescreenReplyAccepted)
+def prescreen_reply(
+    application_id: int,
+    body: PrescreenReply,
+    user: Annotated[User, Depends(require_role("admin", "recruiter"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> PrescreenReplyAccepted:
+    """Deliver a candidate's pre-screening reply into the paused A5 conversation.
+
+    Stub inbound path — a real Meta WhatsApp Cloud API webhook replaces this
+    later. Resumes the LangGraph thread exactly the way a recruiter gate
+    decision does (see needs-attention resolve): enqueue an orchestrator step
+    carrying the message, which feeds the node's `interrupt()`.
+    """
+    row = db.get(Application, application_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
+    if row.state != "PRESCREENING":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Application is not awaiting a pre-screening reply",
+        )
+
+    enqueue_application_step(application_id, {"candidate_message": body.message})
+    return PrescreenReplyAccepted(application_id=application_id, state=row.state)
+
+
 @router.get("/{application_id}", response_model=ApplicationView)
 def get_application(
     application_id: int,
