@@ -54,7 +54,7 @@ function ChartTooltip({
   return (
     <div className="bg-popover rounded-xl border px-3 py-2 shadow-md">
       <p className="text-muted-foreground text-xs">{label}</p>
-      <p className="font-mono text-sm font-semibold tabular-nums">{payload[0].value}</p>
+      <p className="text-sm font-semibold tabular-nums">{payload[0].value}</p>
     </div>
   );
 }

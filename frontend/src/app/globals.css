@@ -182,31 +182,26 @@
     @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium;
   }
 
-  /* Cinematic ambient glow — slow drifting radial blobs behind the console */
-  .ambient-blob {
-    position: absolute;
-    border-radius: 9999px;
-    filter: blur(90px);
-    will-change: transform;
-    animation: ambient-drift 26s ease-in-out infinite alternate;
+  /* Cinematic ambient glow — one soft radial spotlight, breathing slowly */
+  .ambient-glow {
+    will-change: transform, opacity;
+    animation: ambient-breathe 12s ease-in-out infinite alternate;
   }
-  .ambient-blob-2 {
-    animation-duration: 34s;
-    animation-direction: alternate-reverse;
+  .dark .ambient-glow {
+    opacity: 0.35;
   }
-  @keyframes ambient-drift {
+  @keyframes ambient-breathe {
     0% {
-      transform: translate3d(-6%, -4%, 0) scale(1);
-    }
-    50% {
-      transform: translate3d(4%, 6%, 0) scale(1.12);
+      transform: scale(1);
+      opacity: 0.85;
     }
     100% {
-      transform: translate3d(8%, -6%, 0) scale(0.96);
+      transform: scale(1.08);
+      opacity: 1;
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .ambient-blob {
+    .ambient-glow {
       animation: none;
     }
   }

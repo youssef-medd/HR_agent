@@ -27,6 +27,7 @@ function titleCase(s: string): string {
 export function StateBadge({ state }: { state: ApplicationState }) {
   return (
     <span className={`chip ${STATE_STYLES[state] ?? "bg-muted text-muted-foreground"}`}>
+      <span className="size-1.5 shrink-0 rounded-full bg-current" aria-hidden />
       {titleCase(state)}
     </span>
   );

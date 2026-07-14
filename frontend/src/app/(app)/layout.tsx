@@ -13,20 +13,13 @@ export default async function AppLayout({
 
   return (
     <div className="relative min-h-svh overflow-x-clip">
-      {/* Cinematic ambient glow — drifting peach/orange radials behind the console */}
-      <div aria-hidden className="pointer-events-none fixed inset-0 -z-10">
+      {/* Cinematic ambient glow — single soft radial spotlight, breathing slowly */}
+      <div aria-hidden className="pointer-events-none fixed inset-0 -z-10 bg-background">
         <div
-          className="ambient-blob left-[15%] top-[10%] h-[55vh] w-[55vw] opacity-70 dark:opacity-25"
+          className="ambient-glow absolute inset-0"
           style={{
             background:
-              "radial-gradient(closest-side, rgba(255,153,102,0.55), transparent 70%)",
-          }}
-        />
-        <div
-          className="ambient-blob ambient-blob-2 right-[5%] bottom-[0%] h-[50vh] w-[45vw] opacity-60 dark:opacity-20"
-          style={{
-            background:
-              "radial-gradient(closest-side, rgba(255,107,0,0.35), transparent 70%)",
+              "radial-gradient(60% 50% at 50% 38%, rgba(255,140,66,0.28), rgba(255,180,120,0.12) 45%, transparent 72%)",
           }}
         />
       </div>

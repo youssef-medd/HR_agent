@@ -96,7 +96,7 @@ export function TopNav({
         >
           <BellRing className="size-4" aria-hidden />
           {attentionCount > 0 && (
-            <span className="bg-primary absolute -top-0.5 -right-0.5 flex size-4.5 items-center justify-center rounded-full font-mono text-[9px] font-bold text-white">
+            <span className="bg-primary absolute -top-0.5 -right-0.5 flex size-4.5 items-center justify-center rounded-full text-[9px] font-bold text-white">
               {attentionCount > 9 ? "9+" : attentionCount}
             </span>
           )}

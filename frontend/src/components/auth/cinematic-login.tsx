@@ -154,7 +154,7 @@ export function CinematicLogin() {
 
       {/* Content */}
       <div className="relative z-10 flex flex-1 items-center justify-center px-6">
-        <div className="w-full max-w-md">
+        <div className={step === "role" ? "w-full max-w-lg" : "w-full max-w-md"}>
           <AnimatePresence mode="wait">
             {step === "role" && (
               <motion.div
@@ -176,43 +176,67 @@ export function CinematicLogin() {
                   </p>
                 </div>
 
-                <div className="grid gap-3">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {/* Recruiter — the primary path */}
                   <button
                     onClick={() => setStep("signin")}
-                    className="group flex items-center gap-4 rounded-2xl border border-white/10 bg-white/5 p-5 text-left backdrop-blur-[2px] transition-colors duration-200 hover:border-white/25 hover:bg-white/10"
+                    className="group relative flex flex-col items-center gap-4 overflow-hidden rounded-3xl p-[1px] text-center transition-transform duration-200 hover:-translate-y-1"
                   >
-                    <span className="bg-primary flex size-11 shrink-0 items-center justify-center rounded-full">
-                      <BriefcaseBusiness className="size-5 text-white" aria-hidden />
-                    </span>
-                    <span className="flex-1">
-                      <span className="block font-semibold text-white">Recruiter</span>
-                      <span className="block text-sm text-white/50">
-                        Run the pipeline — jobs, candidates, human gates
+                    {/* gradient ring */}
+                    <span
+                      aria-hidden
+                      className="absolute inset-0 rounded-3xl bg-gradient-to-b from-[#ff8a33] via-[#ff6b00]/45 to-transparent opacity-80 transition-opacity duration-200 group-hover:opacity-100"
+                    />
+                    <span className="relative flex w-full flex-col items-center gap-4 rounded-[calc(1.5rem-1px)] bg-[#141210] px-6 pt-8 pb-6">
+                      {/* halo */}
+                      <span
+                        aria-hidden
+                        className="pointer-events-none absolute -top-10 left-1/2 h-28 w-40 -translate-x-1/2 rounded-full bg-[#ff6b00]/25 blur-2xl transition-opacity duration-300 group-hover:opacity-100 sm:opacity-60"
+                      />
+                      <span className="relative flex size-12 items-center justify-center rounded-2xl bg-gradient-to-br from-[#ff8a33] to-[#e85d00] shadow-[0_6px_20px_rgba(255,107,0,0.35)]">
+                        <BriefcaseBusiness className="size-5 text-white" aria-hidden />
+                      </span>
+                      <span className="relative">
+                        <span className="block text-lg font-semibold tracking-tight text-white">
+                          Recruiter
+                        </span>
+                        <span className="mt-1 block text-[13px] leading-relaxed text-white/45">
+                          Jobs, candidates and human gates
+                        </span>
+                      </span>
+                      <span className="text-primary relative inline-flex items-center gap-1.5 text-sm font-medium">
+                        Sign in
+                        <ArrowRight
+                          className="size-3.5 transition-transform duration-200 group-hover:translate-x-1"
+                          aria-hidden
+                        />
                       </span>
                     </span>
-                    <ArrowRight
-                      className="size-4 text-white/40 transition-transform duration-200 group-hover:translate-x-1 group-hover:text-white"
-                      aria-hidden
-                    />
                   </button>
 
+                  {/* Candidate — quiet secondary path */}
                   <button
                     onClick={() => setStep("candidate")}
-                    className="group flex items-center gap-4 rounded-2xl border border-white/10 bg-white/5 p-5 text-left backdrop-blur-[2px] transition-colors duration-200 hover:border-white/25 hover:bg-white/10"
+                    className="group relative flex flex-col items-center gap-4 rounded-3xl border border-white/[0.08] bg-white/[0.03] px-6 pt-8 pb-6 text-center backdrop-blur-[2px] transition-all duration-200 hover:-translate-y-1 hover:border-white/20 hover:bg-white/[0.06]"
                   >
-                    <span className="flex size-11 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/10">
-                      <UserRound className="size-5 text-white" aria-hidden />
+                    <span className="flex size-12 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.06] transition-colors duration-200 group-hover:border-white/20">
+                      <UserRound className="size-5 text-white/80" aria-hidden />
                     </span>
-                    <span className="flex-1">
-                      <span className="block font-semibold text-white">Candidate</span>
-                      <span className="block text-sm text-white/50">
+                    <span>
+                      <span className="block text-lg font-semibold tracking-tight text-white">
+                        Candidate
+                      </span>
+                      <span className="mt-1 block text-[13px] leading-relaxed text-white/45">
                         Track your application journey
                       </span>
                     </span>
-                    <ArrowRight
-                      className="size-4 text-white/40 transition-transform duration-200 group-hover:translate-x-1 group-hover:text-white"
-                      aria-hidden
-                    />
+                    <span className="inline-flex items-center gap-1.5 text-sm font-medium text-white/50 transition-colors duration-200 group-hover:text-white">
+                      Explore
+                      <ArrowRight
+                        className="size-3.5 transition-transform duration-200 group-hover:translate-x-1"
+                        aria-hidden
+                      />
+                    </span>
                   </button>
                 </div>
               </motion.div>

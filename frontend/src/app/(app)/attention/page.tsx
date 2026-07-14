@@ -35,7 +35,7 @@ export default async function AttentionPage() {
       <section className="mb-12">
         <div className="mb-3 flex items-center gap-2">
           <p className="eyebrow eyebrow-accent">Open</p>
-          <span className="bg-muted text-muted-foreground font-mono flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px]">
+          <span className="bg-muted text-muted-foreground flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px]">
             {open.length}
           </span>
         </div>
@@ -62,7 +62,7 @@ export default async function AttentionPage() {
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-3">
-                  <p className="text-muted-foreground font-mono hidden text-[10px] sm:block">
+                  <p className="text-muted-foreground hidden text-[10px] sm:block">
                     app #{item.application_id} ·{" "}
                     {new Date(item.created_at).toLocaleDateString("en-GB", { dateStyle: "medium" })}
                   </p>
@@ -84,7 +84,7 @@ export default async function AttentionPage() {
       <section>
         <div className="mb-3 flex items-center gap-2">
           <p className="eyebrow">Resolved</p>
-          <span className="bg-muted text-muted-foreground font-mono flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px]">
+          <span className="bg-muted text-muted-foreground flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px]">
             {resolved.length}
           </span>
         </div>

@@ -32,7 +32,7 @@ export function UserMenu({ user }: { user: MeResponse }) {
         aria-label="Account menu"
       >
         <Avatar className="size-8">
-          <AvatarFallback className="font-mono text-xs">
+          <AvatarFallback className="text-xs">
             {initials}
           </AvatarFallback>
         </Avatar>

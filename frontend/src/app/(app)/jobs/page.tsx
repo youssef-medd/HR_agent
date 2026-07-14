@@ -65,13 +65,13 @@ export default async function JobsPage() {
               <div className="mt-6 flex items-end justify-between border-t pt-4">
                 <div className="flex gap-6">
                   <div>
-                    <p className="font-mono text-xl font-bold">{job.applicants}</p>
+                    <p className="text-xl font-bold">{job.applicants}</p>
                     <p className="eyebrow">Applicants</p>
                   </div>
                   <div>
                     <p
                       className={cn(
-                        "font-mono text-xl font-bold",
+                        "text-xl font-bold",
                         job.shortlisted > 0 && "text-primary",
                       )}
                     >
@@ -80,7 +80,7 @@ export default async function JobsPage() {
                     <p className="eyebrow">Shortlisted</p>
                   </div>
                 </div>
-                <p className="text-muted-foreground font-mono text-xs">
+                <p className="text-muted-foreground text-xs">
                   {job.created_at.slice(0, 10)}
                 </p>
               </div>

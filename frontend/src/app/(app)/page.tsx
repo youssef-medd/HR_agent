@@ -81,7 +81,7 @@ function SectionHeader({
     <div className="flex items-center justify-between px-6 pt-5 pb-3">
       <div className="flex items-center gap-2">
         <h2 className="font-heading text-base font-semibold tracking-tight">{title}</h2>
-        <span className="bg-muted text-muted-foreground font-mono flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px]">
+        <span className="bg-muted text-muted-foreground flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px]">
           {count}
         </span>
       </div>
@@ -130,7 +130,7 @@ export default async function OverviewPage() {
           <div key={s.label} className="surface flex flex-col gap-5 p-6">
             <p className="eyebrow">{s.label}</p>
             <div className="mt-auto">
-              <p className="font-mono text-4xl leading-none font-bold tracking-tight tabular-nums">
+              <p className="text-4xl leading-none font-bold tracking-tight tabular-nums">
                 {s.value}
               </p>
               <p className="text-muted-foreground mt-2 text-xs">{s.hint}</p>
@@ -141,7 +141,7 @@ export default async function OverviewPage() {
         {/* Accent tile — human gates awaiting review */}
         <Link href="/attention" className="surface-accent group flex flex-col gap-5 p-6">
           <div className="flex items-center justify-between">
-            <p className="font-mono text-[11px] font-medium tracking-[0.16em] text-white/80 uppercase">
+            <p className="text-[11px] font-medium tracking-[0.16em] text-white/80 uppercase">
               Awaiting review
             </p>
             <ArrowUpRight
@@ -150,7 +150,7 @@ export default async function OverviewPage() {
             />
           </div>
           <div className="mt-auto">
-            <p className="font-mono text-4xl leading-none font-bold tracking-tight tabular-nums">
+            <p className="text-4xl leading-none font-bold tracking-tight tabular-nums">
               {openAttention.length}
             </p>
             <p className="mt-2 text-xs text-white/80">human gates open</p>
@@ -206,7 +206,7 @@ export default async function OverviewPage() {
                     <Avatar label={name} />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium">{name}</p>
-                      <p className="text-muted-foreground font-mono mt-0.5 text-[11px]">
+                      <p className="text-muted-foreground mt-0.5 text-[11px]">
                         app #{item.application_id}
                       </p>
                     </div>
@@ -241,7 +241,7 @@ export default async function OverviewPage() {
                     <Avatar label={name} />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium">{name}</p>
-                      <p className="text-muted-foreground font-mono mt-0.5 text-[11px]">
+                      <p className="text-muted-foreground mt-0.5 text-[11px]">
                         Job #{app.job_id}
                       </p>
                     </div>

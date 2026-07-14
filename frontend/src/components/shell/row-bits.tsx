@@ -12,7 +12,7 @@ function initials(source: string): string {
 
 export function Avatar({ label }: { label: string }) {
   return (
-    <span className="bg-muted text-muted-foreground font-mono flex size-10 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold">
+    <span className="bg-muted text-muted-foreground flex size-10 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold">
       {initials(label)}
     </span>
   );

@@ -17,25 +17,25 @@ export function BrandBadge({
   return (
     <span
       className={cn(
-        "border-primary/70 relative inline-flex items-center gap-1.5 rounded-full border px-3 py-1",
+        "border-primary/60 relative inline-flex items-center gap-2 rounded-full border bg-transparent px-4 py-1.5",
         className,
       )}
     >
-      <UserRound className="text-primary size-3.5" strokeWidth={2.25} aria-hidden />
+      <UserRound className="text-primary size-4" strokeWidth={2} aria-hidden />
       <span
         className={cn(
-          "text-xs font-semibold tracking-tight whitespace-nowrap",
+          "font-heading text-sm font-semibold tracking-tight whitespace-nowrap",
           tone === "dark" ? "text-white" : "text-foreground",
         )}
       >
         Intelligent HR
       </span>
       <Sparkle
-        className="text-primary fill-primary absolute -top-2 -right-1.5 size-3.5"
+        className="text-primary fill-primary absolute -top-2.5 -right-2 size-4"
         aria-hidden
       />
       <span
-        className="bg-primary absolute -top-0.5 -right-2.5 size-1 rounded-full"
+        className="bg-primary absolute -top-0.5 -right-3 size-1 rounded-full"
         aria-hidden
       />
     </span>

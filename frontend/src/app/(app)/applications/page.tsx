@@ -56,7 +56,7 @@ export default async function ApplicationsPage() {
                 <div key={state} className="surface w-72 shrink-0 p-3">
                   <div className="flex items-center justify-between px-2 py-2">
                     <StateBadge state={state} />
-                    <span className="bg-muted text-muted-foreground font-mono flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px]">
+                    <span className="bg-muted text-muted-foreground flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px]">
                       {stageApps.length}
                     </span>
                   </div>
@@ -69,7 +69,7 @@ export default async function ApplicationsPage() {
                         <p className="text-muted-foreground mb-2 text-xs">
                           Job #{app.job_id}
                         </p>
-                        <p className="text-muted-foreground font-mono text-[10px]">
+                        <p className="text-muted-foreground text-[10px]">
                           #{app.id} · {app.created_at.slice(0, 10)}
                         </p>
                       </div>
