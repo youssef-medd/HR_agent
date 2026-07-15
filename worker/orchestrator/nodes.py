@@ -30,10 +30,20 @@ from orchestrator.agents.prescreen import (
     interpret_consent,
     screening_questions,
 )
+from orchestrator.agents.scheduler import (
+    SchedulerError,
+    booking_link,
+    booking_prompt,
+    interpret_booking_reply,
+)
 from orchestrator.agents.scorer import ScoreError, score_candidate
 from orchestrator.gates import execute_after_rejection_gate, require_gate
 from orchestrator.idempotency import with_ledger
-from orchestrator.side_effects import _send_confirmation_impl, _send_whatsapp_impl
+from orchestrator.side_effects import (
+    _send_booking_link_impl,
+    _send_confirmation_impl,
+    _send_whatsapp_impl,
+)
 from orchestrator.state_machine import State, transition
 
 
@@ -221,6 +231,13 @@ def _save_prescreen(db: Session, application_id: int, block: dict[str, Any]) -> 
         db.commit()
 
 
+def _save_interview(db: Session, application_id: int, block: dict[str, Any]) -> None:
+    row = db.get(Application, application_id)
+    if row is not None:
+        row.payload = {**row.payload, "interview": block}
+        db.commit()
+
+
 def prescreen_node(db: Session, state: NodeState) -> NodeState:
     """A5 — WhatsApp conversational pre-screening.
 
@@ -322,3 +339,53 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
     block["status"] = "done"
     _save_prescreen(db, app_id, block)
     return _advance(db, state, State.PRESCREENED, "prescreen")
+
+
+def schedule_node(db: Session, state: NodeState) -> NodeState:
+    """A6 — interview scheduling.
+
+    Sends a Cal.com booking link (stubbed) and pauses until the candidate
+    confirms a booked slot, then advances PRESCREENED -> INTERVIEW_SCHEDULED. A
+    single interrupt keeps the replay deterministic; the send is ledger-guarded
+    (exactly-once) and there is no pre-interrupt transition, so the application
+    simply rests at PRESCREENED while awaiting the booking reply.
+    """
+    app_id = state["application_id"]
+    attempt = state.get("attempt", 1)
+    app_row = db.get(Application, app_id)
+    payload = dict(app_row.payload) if app_row is not None else {}
+    recipient = app_row.candidate_ref if app_row is not None else "unknown"
+
+    if app_row is not None:
+        state["stage"] = app_row.state
+
+    link = booking_link(app_id)
+    with_ledger(
+        db, app_id, "send_booking_link", attempt,
+        lambda: _send_booking_link_impl(app_id, recipient, link),
+    )
+    reply = _candidate_message(
+        interrupt({"kind": "await_booking", "application_id": app_id, "link": link})
+    )
+
+    interview = dict(payload.get("interview") or {})
+    try:
+        conf = interpret_booking_reply(reply, user_id=str(app_id))
+    except SchedulerError as exc:
+        interview.update(booked=False, link=link)
+        _save_interview(db, app_id, interview)
+        db.add(ApplicationEvent(
+            application_id=app_id, kind="schedule_failed", step="send_booking_link",
+            attempt=attempt, payload={"error": str(exc)},
+        ))
+        return _advance(db, state, State.NEEDS_ATTENTION, "schedule_failed")
+
+    if not conf.confirmed:
+        interview.update(booked=False, link=link)
+        _save_interview(db, app_id, interview)
+        return _advance(db, state, State.NEEDS_ATTENTION, "schedule_not_booked")
+
+    booked_at = interview.get("at") or datetime.now(UTC).isoformat()
+    interview.update(booked=True, when=conf.when, link=link, at=booked_at)
+    _save_interview(db, app_id, interview)
+    return _advance(db, state, State.INTERVIEW_SCHEDULED, "schedule")

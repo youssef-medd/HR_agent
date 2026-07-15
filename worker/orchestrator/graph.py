@@ -23,6 +23,7 @@ from orchestrator.nodes import (
     parse_node,
     pool_node,
     prescreen_node,
+    schedule_node,
     score_node,
     send_confirmation_node,
     shortlisted_node,
@@ -59,6 +60,7 @@ def build_graph(db_factory: Callable[[], Session], checkpointer: Any) -> Any:
     graph.add_node("send_confirmation", _wrap(send_confirmation_node))
     graph.add_node("shortlisted", _wrap(shortlisted_node))
     graph.add_node("prescreen", _wrap(prescreen_node))
+    graph.add_node("schedule", _wrap(schedule_node))
     graph.add_node("pool", _wrap(pool_node))
     graph.add_node("decline_pending", _wrap(decline_pending_node))
     graph.add_node("declined", _wrap(declined_node))
@@ -75,12 +77,16 @@ def build_graph(db_factory: Callable[[], Session], checkpointer: Any) -> Any:
         _route_by_recommendation,
         {"shortlisted": "shortlisted", "pool": "pool", "decline_pending": "decline_pending"},
     )
-    # A shortlisted candidate flows into A5 pre-screening, which pauses on the
-    # first interrupt awaiting the candidate's consent reply. Both terminal
-    # outcomes (PRESCREENED / NEEDS_ATTENTION) end the run for this slice —
-    # PRESCREENED -> INTERVIEW_SCHEDULED (A6) is wired later.
+    # A shortlisted candidate flows into A5 pre-screening (pauses awaiting the
+    # consent reply). On PRESCREENED it continues into A6 scheduling (pauses
+    # awaiting the booking reply); a no-consent PRESCREEN halts at
+    # NEEDS_ATTENTION rather than falling into scheduling. INTERVIEW_SCHEDULED
+    # -> INTERVIEWED (A7) is wired later.
     graph.add_edge("shortlisted", "prescreen")
-    graph.add_edge("prescreen", END)
+    graph.add_conditional_edges(
+        "prescreen", _halt_if_needs_attention("schedule"), {END: END, "schedule": "schedule"}
+    )
+    graph.add_edge("schedule", END)
     graph.add_edge("pool", END)
     graph.add_edge("decline_pending", "declined")
     graph.add_edge("declined", END)

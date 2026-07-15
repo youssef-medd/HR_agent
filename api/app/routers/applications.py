@@ -163,6 +163,32 @@ def prescreen_reply(
     return PrescreenReplyAccepted(application_id=application_id, state=row.state)
 
 
+@router.post("/{application_id}/interview/booking", response_model=PrescreenReplyAccepted)
+def interview_booking_reply(
+    application_id: int,
+    body: PrescreenReply,
+    user: Annotated[User, Depends(require_role("admin", "recruiter"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> PrescreenReplyAccepted:
+    """Deliver a candidate's interview-booking reply into the paused A6 step.
+
+    Stub inbound path — a real Cal.com booking webhook replaces this later.
+    Resumes the LangGraph thread the same way the pre-screening reply does; the
+    application rests at PRESCREENED while the schedule node awaits the booking.
+    """
+    row = db.get(Application, application_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
+    if row.state != "PRESCREENED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Application is not awaiting an interview booking",
+        )
+
+    enqueue_application_step(application_id, {"candidate_message": body.message})
+    return PrescreenReplyAccepted(application_id=application_id, state=row.state)
+
+
 @router.get("/{application_id}", response_model=ApplicationView)
 def get_application(
     application_id: int,

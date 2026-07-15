@@ -77,3 +77,17 @@ def _send_whatsapp_impl(application_id: int, recipient: str, body: str) -> dict[
     }
     _SENT.append(entry)
     return entry
+
+
+def _send_booking_link_impl(application_id: int, recipient: str, link: str) -> dict[str, Any]:
+    """A6 interview booking link. Non-sensitive — called from
+    `nodes.schedule_node` through the idempotency ledger. The real Cal.com API
+    (link creation + booking webhook) plugs in here later."""
+    entry = {
+        "kind": "booking_link",
+        "application_id": application_id,
+        "recipient": recipient,
+        "link": link,
+    }
+    _SENT.append(entry)
+    return entry
