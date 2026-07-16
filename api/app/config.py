@@ -30,5 +30,13 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:3001"], alias="CORS_ORIGINS"
     )
 
+    # WhatsApp Cloud API (A5/A6 transport). Empty = stub mode (no real send;
+    # the webhook verify handshake is disabled).
+    whatsapp_token: str = Field(default="", alias="WHATSAPP_TOKEN")
+    whatsapp_phone_id: str = Field(default="", alias="WHATSAPP_PHONE_ID")
+    whatsapp_verify_token: str = Field(default="", alias="WHATSAPP_VERIFY_TOKEN")
+    whatsapp_app_secret: str = Field(default="", alias="WHATSAPP_APP_SECRET")
+    whatsapp_api_version: str = Field(default="v23.0", alias="WHATSAPP_API_VERSION")
+
 
 settings = Settings()  # type: ignore[call-arg]

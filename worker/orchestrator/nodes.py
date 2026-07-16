@@ -360,9 +360,10 @@ def schedule_node(db: Session, state: NodeState) -> NodeState:
         state["stage"] = app_row.state
 
     link = booking_link(app_id)
+    message = booking_prompt(link)
     with_ledger(
         db, app_id, "send_booking_link", attempt,
-        lambda: _send_booking_link_impl(app_id, recipient, link),
+        lambda: _send_booking_link_impl(app_id, recipient, link, message),
     )
     reply = _candidate_message(
         interrupt({"kind": "await_booking", "application_id": app_id, "link": link})
