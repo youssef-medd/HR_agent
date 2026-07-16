@@ -1,0 +1,53 @@
+flowchart TD
+    A0["A0 · Orchestrator<br/>state machine, gates, retries, audit — wraps every step"]
+
+    A1["A1 · Job Intake & Posting<br/>Raw JD → JobSpec + weights + channel content"]
+    A2["A2 · Sourcing<br/>Search strings + outreach drafts (LinkedIn-assist, manual send)"]
+    A3["A3 · CV Ingestion & Parsing<br/>Any file/lang → CandidateProfile + dedup"]
+    A4["A4 · Scoring & Matching<br/>Hard filters → semantic retrieval → LLM judge → ScoreCard /100"]
+    V{Verdict band?}
+    POOL["Held in pool<br/>(recruiter can promote)"]
+    A5["A5 · Pre-screening Chat<br/>FR/EN/AR · web/email/WhatsApp · slot-filling Q&A"]
+    RR{Recruiter review?}
+    A6["A6 · Interview Scheduling<br/>Propose slots → book → ICS + reminders"]
+    IV["Interview happens<br/>(human-led)"]
+    RD{Recruiter decision?}
+    GR[/"Human gate (A0)<br/>approve rejection"/]
+    GO[/"Human gate (A0)<br/>approve offer"/]
+    A7R["A7 · rejection email"]
+    A7O["A7 · offer sent"]
+    HIRED(["HIRED"])
+    A8["A8 · Smart Onboarding<br/>Checklist, docs, week-1 plan, handbook Q&A (RAG)"]
+    A9["A9 · Reporting & Analytics<br/>Funnel, SLAs, cost per hire"]
+
+    A1 --> A2
+    A1 -. "direct applications (upload/email)" .-> A3
+    A2 --> A3
+    A3 --> A4
+    A4 --> V
+    V -- "45–69 · pool" --> POOL
+    V -- "≥70 · shortlist" --> A5
+    V -- "<45 · decline" --> GR
+    A5 --> RR
+    RR -- positive --> A6
+    RR -- negative --> GR
+    A6 --> IV
+    IV --> RD
+    RD -- reject --> GR
+    RD -- hire --> GO
+    GR -- approved --> A7R
+    GO -- approved --> A7O
+    A7O --> HIRED
+    HIRED --> A8
+
+    A0 -. governs all transitions .-> A1
+    A3 -.-> A9
+    A4 -.-> A9
+    A6 -.-> A9
+    A7O -.-> A9
+    A8 -.-> A9
+
+    classDef gate stroke:#c0392b,fill:#f9e0e0,color:#000;
+    classDef done stroke:#27ae60,fill:#d5f5e3,color:#000;
+    class GR,GO gate;
+    class HIRED done;

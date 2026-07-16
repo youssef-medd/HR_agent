@@ -54,3 +54,4 @@ uploads/
 # Logs
 *.log
 logs/
+.github/.puppeteer.json
