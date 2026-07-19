@@ -92,6 +92,31 @@ export interface AttentionItem {
   created_at: string;
 }
 
+export interface FunnelStage {
+  stage: string;
+  reached: number;
+  rate_from_prev: number;
+  avg_hours_from_received: number | null;
+}
+
+export interface JobFunnel {
+  job_id: number;
+  title: string;
+  applicants: number;
+  shortlisted: number;
+}
+
+export interface ReportOverview {
+  total_applications: number;
+  by_state: Record<string, number>;
+  funnel: FunnelStage[];
+  avg_score: number | null;
+  shortlist_rate: number;
+  hire_rate: number;
+  open_gates: number;
+  per_job: JobFunnel[];
+}
+
 export const API_URL = process.env.API_URL ?? "http://localhost:8000";
 
 export const SESSION_COOKIE = "welyne_session";

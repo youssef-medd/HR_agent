@@ -4,6 +4,7 @@ import {
   Briefcase,
   GitBranch,
   BellRing,
+  BarChart3,
   type LucideIcon,
 } from "lucide-react";
 
@@ -21,5 +22,6 @@ export const NAV_ITEMS: NavItem[] = [
   { title: "Candidates", href: "/candidates", icon: Users },
   { title: "Jobs", href: "/jobs", icon: Briefcase },
   { title: "Applications", href: "/applications", icon: GitBranch },
+  { title: "Reports", href: "/reports", icon: BarChart3 },
   { title: "Needs attention", href: "/attention", icon: BellRing },
 ];

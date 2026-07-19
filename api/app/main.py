@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import applications, attention, auth, chat, jobs, public, whatsapp
+from app.routers import applications, attention, auth, chat, jobs, public, reports, whatsapp
 
 app = FastAPI(title="Welyne HR AI Agent", version="0.1.0")
 
@@ -28,6 +28,7 @@ app.include_router(applications.router)
 app.include_router(attention.router)
 app.include_router(jobs.router)
 app.include_router(public.router)
+app.include_router(reports.router)
 app.include_router(whatsapp.router)
 
 
