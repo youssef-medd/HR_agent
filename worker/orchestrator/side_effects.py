@@ -16,6 +16,8 @@ import os
 import re
 from typing import Any
 
+from orchestrator.emails import render_email, send_email
+
 # In-memory sent log — the audit surface for exactly-once delivery. Kept even
 # once real transports are wired: every send appends here for observability and
 # is what the test suite asserts against.
@@ -85,32 +87,41 @@ def _sent_log_snapshot() -> list[dict[str, Any]]:
 
 
 def _send_rejection_impl(application_id: int, recipient: str, template: str) -> dict[str, Any]:
+    subject, body = render_email(template or "rejection")
+    email_id = send_email(recipient, subject, body)
     entry = {
         "kind": "rejection",
         "application_id": application_id,
         "recipient": recipient,
         "template": template,
+        "email_id": email_id,
     }
     _SENT.append(entry)
     return entry
 
 
 def _send_offer_impl(application_id: int, recipient: str, template: str) -> dict[str, Any]:
+    subject, body = render_email(template or "offer")
+    email_id = send_email(recipient, subject, body)
     entry = {
         "kind": "offer",
         "application_id": application_id,
         "recipient": recipient,
         "template": template,
+        "email_id": email_id,
     }
     _SENT.append(entry)
     return entry
 
 
 def _send_confirmation_impl(application_id: int, recipient: str) -> dict[str, Any]:
+    subject, body = render_email("confirmation")
+    email_id = send_email(recipient, subject, body)
     entry = {
         "kind": "confirmation",
         "application_id": application_id,
         "recipient": recipient,
+        "email_id": email_id,
     }
     _SENT.append(entry)
     return entry
