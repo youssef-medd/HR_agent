@@ -7,6 +7,8 @@ the worker level via `--concurrency=N`.
 
 from __future__ import annotations
 
+import os
+
 from celery import Celery
 
 from orchestrator.config import settings
@@ -27,3 +29,13 @@ celery.conf.update(
     result_expires=3600,
     broker_connection_retry_on_startup=True,
 )
+
+# A3 email intake — Celery beat runs the IMAP poll every IMAP_POLL_SECONDS. The
+# task itself no-ops when IMAP is unconfigured, so this schedule is inert until
+# credentials are set. Requires the worker to run with beat enabled (`-B`).
+celery.conf.beat_schedule = {
+    "poll-email-inbox": {
+        "task": "orchestrator.poll_email_inbox",
+        "schedule": float(os.environ.get("IMAP_POLL_SECONDS", "120")),
+    }
+}

@@ -9,18 +9,25 @@ recruiter action). Retries are backed off; on final failure a
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from celery.utils.log import get_task_logger
 from langgraph.types import Command
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.models.application import Application
+from app.models.job import Job
 from app.models.needs_attention import NeedsAttention
 from orchestrator.celery_app import celery
 from orchestrator.checkpointer import postgres_saver
 from orchestrator.config import settings
+from orchestrator.email_intake import (
+    build_application,
+    fetch_new_cv_attachments,
+    imap_configured,
+)
 from orchestrator.graph import build_graph
 
 logger = get_task_logger(__name__)
@@ -107,3 +114,46 @@ def run_application_step(self, application_id: int, event: dict[str, Any]) -> di
                 db.commit()
             raise
         raise
+
+
+def _already_ingested(db, sender: str, message_id: str) -> bool:
+    """True if an application from this sender already carries this message-id."""
+    if not message_id:
+        return False
+    rows = db.scalars(
+        select(Application).where(Application.candidate_ref == sender)
+    ).all()
+    return any((r.payload or {}).get("email_message_id") == message_id for r in rows)
+
+
+@celery.task(name="orchestrator.poll_email_inbox")
+def poll_email_inbox() -> dict[str, Any]:
+    """A3 — pull CVs from the IMAP inbox and start each through the pipeline.
+
+    No-op when IMAP is unconfigured. New attachments become RECEIVED
+    applications (deduped by email message-id) and are handed to the
+    orchestrator via the same task the upload endpoint enqueues.
+    """
+    if not imap_configured():
+        return {"polled": 0, "created": []}
+
+    incomings = fetch_new_cv_attachments()
+    default_job_id = int(os.environ.get("INTAKE_DEFAULT_JOB_ID", "1"))
+    created: list[int] = []
+
+    with _db_factory() as db:
+        job = db.get(Job, default_job_id)
+        jd_text = job.description if job is not None and job.description else None
+
+        for inc in incomings:
+            if _already_ingested(db, inc.sender_email or inc.filename, inc.message_id):
+                continue
+            row = build_application(inc, default_job_id, jd_text)
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+            run_application_step.delay(row.id, {})
+            created.append(row.id)
+
+    logger.info("Email intake: polled %d attachment(s), created %s", len(incomings), created)
+    return {"polled": len(incomings), "created": created}
