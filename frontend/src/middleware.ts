@@ -11,8 +11,10 @@ export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   const isLogin = pathname === "/login";
+  // The candidate apply flow is public — no session required.
+  const isPublic = pathname === "/apply" || pathname.startsWith("/apply/");
 
-  if (!hasSession && !isLogin) {
+  if (!hasSession && !isLogin && !isPublic) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("next", pathname);
@@ -30,6 +32,7 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // Everything except Next internals, static assets, and the auth BFF routes
-  matcher: ["/((?!api/auth|_next/static|_next/image|favicon.ico|.*\\.\\w+$).*)"],
+  // Everything except Next internals, static assets, and the public BFF routes
+  // (auth login + the unauthenticated candidate apply proxy).
+  matcher: ["/((?!api/auth|api/public|_next/static|_next/image|favicon.ico|.*\\.\\w+$).*)"],
 };
