@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.agents.sourcer import SourcingKit, generate_sourcing_kit
 from app.db import get_db
 from app.models.application import Application
 from app.models.job import Job
@@ -110,3 +111,22 @@ def get_job(
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
     return _to_view(job)
+
+
+@router.post("/{job_id}/sourcing", response_model=SourcingKit)
+def job_sourcing(
+    job_id: int,
+    user: Annotated[User, Depends(require_role("admin", "recruiter"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> SourcingKit:
+    """A2 — generate a recruiter sourcing kit (boolean search + outreach draft)."""
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    return generate_sourcing_kit(
+        title=job.title,
+        description=job.description,
+        department=job.department,
+        location=job.location,
+        user_id=str(user.id),
+    )

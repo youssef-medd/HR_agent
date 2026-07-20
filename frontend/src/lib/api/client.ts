@@ -92,6 +92,14 @@ export interface AttentionItem {
   created_at: string;
 }
 
+export interface SourcingKit {
+  boolean_search: string;
+  keywords: string[];
+  platforms: string[];
+  outreach_subject: string;
+  outreach_message: string;
+}
+
 export interface FunnelStage {
   stage: string;
   reached: number;

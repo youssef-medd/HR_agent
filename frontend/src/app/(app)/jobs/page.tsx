@@ -1,4 +1,5 @@
 import { CreateJobDialog } from "@/components/jobs/create-job-dialog";
+import { SourceDialog } from "@/components/jobs/source-dialog";
 import { PageHeader } from "@/components/shell/page-header";
 import { type JobView } from "@/lib/api/client";
 import { apiGet } from "@/lib/api/server";
@@ -80,9 +81,7 @@ export default async function JobsPage() {
                     <p className="eyebrow">Shortlisted</p>
                   </div>
                 </div>
-                <p className="text-muted-foreground text-xs">
-                  {job.created_at.slice(0, 10)}
-                </p>
+                <SourceDialog jobId={job.id} jobTitle={job.title} />
               </div>
             </article>
           ))}
