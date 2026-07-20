@@ -1,3 +1,4 @@
+import { OnboardDialog } from "@/components/applications/onboard-dialog";
 import { UploadCvDialog } from "@/components/applications/upload-cv-dialog";
 import { PageHeader } from "@/components/shell/page-header";
 import { StateBadge } from "@/components/shell/state-badge";
@@ -72,6 +73,12 @@ export default async function ApplicationsPage() {
                         <p className="text-muted-foreground text-[10px]">
                           #{app.id} · {app.created_at.slice(0, 10)}
                         </p>
+                        {(state === "OFFER" || state === "INTERVIEWED") && (
+                          <OnboardDialog
+                            appId={app.id}
+                            name={app.full_name || app.candidate_ref}
+                          />
+                        )}
                       </div>
                     ))}
                   </div>

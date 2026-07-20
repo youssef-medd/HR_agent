@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agents.onboarder import OnboardingKit, generate_onboarding_kit
 from app.db import get_db
 from app.models.application import Application
 from app.models.job import Job
@@ -204,4 +205,28 @@ def get_application(
         candidate_ref=row.candidate_ref,
         state=row.state,
         cv=row.payload.get("cv"),
+    )
+
+
+@router.post("/{application_id}/onboarding", response_model=OnboardingKit)
+def application_onboarding(
+    application_id: int,
+    user: Annotated[User, Depends(require_role("admin", "recruiter"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> OnboardingKit:
+    """A8 — generate an onboarding kit for a hired candidate (checklist, week-1 plan)."""
+    row = db.get(Application, application_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
+
+    job = db.get(Job, row.job_id)
+    role_title = job.title if job is not None else "New role"
+    department = job.department if job is not None else None
+    candidate_name = (row.payload.get("cv") or {}).get("full_name") or None
+
+    return generate_onboarding_kit(
+        role_title=role_title,
+        department=department,
+        candidate_name=candidate_name,
+        user_id=str(user.id),
     )

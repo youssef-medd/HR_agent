@@ -92,6 +92,18 @@ export interface AttentionItem {
   created_at: string;
 }
 
+export interface OnboardingTask {
+  when: string;
+  task: string;
+}
+
+export interface OnboardingKit {
+  welcome_message: string;
+  checklist: string[];
+  week_one_plan: OnboardingTask[];
+  documents: string[];
+}
+
 export interface SourcingKit {
   boolean_search: string;
   keywords: string[];
