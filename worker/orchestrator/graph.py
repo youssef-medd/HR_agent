@@ -20,6 +20,8 @@ from orchestrator.nodes import (
     NodeState,
     decline_pending_node,
     declined_node,
+    interview_node,
+    onboarding_node,
     parse_node,
     pool_node,
     prescreen_node,
@@ -53,6 +55,11 @@ def build_graph(db_factory: Callable[[], Session], checkpointer: Any) -> Any:
         rec = (state.get("scratch") or {}).get("recommendation", "pool")
         return {"shortlist": "shortlisted", "pool": "pool"}.get(rec, "decline_pending")
 
+    # After the offer gate: a hire flows into A8 onboarding; a no-hire ends at
+    # NEEDS_ATTENTION.
+    def _route_after_interview(state: NodeState) -> str:
+        return "onboarding" if state.get("stage") == "HIRED" else END
+
     graph = StateGraph(NodeState)
 
     graph.add_node("parse", _wrap(parse_node))
@@ -61,6 +68,8 @@ def build_graph(db_factory: Callable[[], Session], checkpointer: Any) -> Any:
     graph.add_node("shortlisted", _wrap(shortlisted_node))
     graph.add_node("prescreen", _wrap(prescreen_node))
     graph.add_node("schedule", _wrap(schedule_node))
+    graph.add_node("interview", _wrap(interview_node))
+    graph.add_node("onboarding", _wrap(onboarding_node))
     graph.add_node("pool", _wrap(pool_node))
     graph.add_node("decline_pending", _wrap(decline_pending_node))
     graph.add_node("declined", _wrap(declined_node))
@@ -80,13 +89,20 @@ def build_graph(db_factory: Callable[[], Session], checkpointer: Any) -> Any:
     # A shortlisted candidate flows into A5 pre-screening (pauses awaiting the
     # consent reply). On PRESCREENED it continues into A6 scheduling (pauses
     # awaiting the booking reply); a no-consent PRESCREEN halts at
-    # NEEDS_ATTENTION rather than falling into scheduling. INTERVIEW_SCHEDULED
-    # -> INTERVIEWED (A7) is wired later.
+    # NEEDS_ATTENTION. After scheduling, A7 pauses on the offer gate for the
+    # recruiter's post-interview decision; an approval extends the offer, marks
+    # HIRED, and flows into A8 onboarding (-> ONBOARDING).
     graph.add_edge("shortlisted", "prescreen")
     graph.add_conditional_edges(
         "prescreen", _halt_if_needs_attention("schedule"), {END: END, "schedule": "schedule"}
     )
-    graph.add_edge("schedule", END)
+    graph.add_conditional_edges(
+        "schedule", _halt_if_needs_attention("interview"), {END: END, "interview": "interview"}
+    )
+    graph.add_conditional_edges(
+        "interview", _route_after_interview, {END: END, "onboarding": "onboarding"}
+    )
+    graph.add_edge("onboarding", END)
     graph.add_edge("pool", END)
     graph.add_edge("decline_pending", "declined")
     graph.add_edge("declined", END)

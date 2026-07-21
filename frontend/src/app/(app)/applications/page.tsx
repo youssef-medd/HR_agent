@@ -20,10 +20,19 @@ const PIPELINE: ApplicationState[] = [
   "INTERVIEW_SCHEDULED",
   "INTERVIEWED",
   "OFFER",
+  "HIRED",
+  "ONBOARDING",
   "DECLINE_PENDING",
   "POOL",
   "DECLINED",
 ];
+
+const ONBOARD_STATES: ReadonlySet<string> = new Set([
+  "INTERVIEWED",
+  "OFFER",
+  "HIRED",
+  "ONBOARDING",
+]);
 
 export default async function ApplicationsPage() {
   const apps = await apiGet<ApplicationSummary[]>("/applications", []);
@@ -73,7 +82,7 @@ export default async function ApplicationsPage() {
                         <p className="text-muted-foreground text-[10px]">
                           #{app.id} · {app.created_at.slice(0, 10)}
                         </p>
-                        {(state === "OFFER" || state === "INTERVIEWED") && (
+                        {ONBOARD_STATES.has(state) && (
                           <OnboardDialog
                             appId={app.id}
                             name={app.full_name || app.candidate_ref}

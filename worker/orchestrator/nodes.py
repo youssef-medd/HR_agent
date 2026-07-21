@@ -19,8 +19,10 @@ from typing import Any, TypedDict
 from langgraph.types import interrupt
 from sqlalchemy.orm import Session
 
+from app.agents.onboarder import OnboardingError, generate_onboarding_kit
 from app.models.application import Application
 from app.models.application_event import ApplicationEvent
+from app.models.job import Job
 from orchestrator.agents.masking import mask_cv
 from orchestrator.agents.parser import CVData, CVParseError, extract_text, parse_cv
 from orchestrator.agents.prescreen import (
@@ -37,7 +39,11 @@ from orchestrator.agents.scheduler import (
     interpret_booking_reply,
 )
 from orchestrator.agents.scorer import ScoreError, score_candidate
-from orchestrator.gates import execute_after_rejection_gate, require_gate
+from orchestrator.gates import (
+    execute_after_offer_gate,
+    execute_after_rejection_gate,
+    require_gate,
+)
 from orchestrator.idempotency import with_ledger
 from orchestrator.side_effects import (
     _send_booking_link_impl,
@@ -390,3 +396,75 @@ def schedule_node(db: Session, state: NodeState) -> NodeState:
     interview.update(booked=True, when=conf.when, link=link, at=booked_at)
     _save_interview(db, app_id, interview)
     return _advance(db, state, State.INTERVIEW_SCHEDULED, "schedule")
+
+
+def interview_node(db: Session, state: NodeState) -> NodeState:
+    """A7 — post-interview recruiter decision through the sensitive offer gate.
+
+    The interview itself is human-led; this node pauses on `require_gate("offer")`
+    until a recruiter records the outcome. Approve → the candidate is marked
+    interviewed, an offer email goes out (via the offer gate), and the state
+    advances to HIRED. Reject → interviewed, then NEEDS_ATTENTION (no hire).
+
+    Gate-first (like `declined_node`): the interrupt precedes every transition,
+    so the replayed node advances exactly once on resume.
+    """
+    app_id = state["application_id"]
+    attempt = state.get("attempt", 1)
+
+    decision = require_gate(db, app_id, "offer")
+    app_row = db.get(Application, app_id)
+    recipient = app_row.candidate_ref if app_row is not None else "unknown@example.com"
+
+    _advance(db, state, State.INTERVIEWED, "interviewed")
+
+    if decision.get("decision") == "approve":
+        _advance(db, state, State.OFFER, "offer")
+
+        def _work() -> dict[str, Any]:
+            return execute_after_offer_gate(db, app_id, recipient, "offer@v1")
+
+        with_ledger(db, app_id, "send_offer", attempt, _work)
+        return _advance(db, state, State.HIRED, "hired")
+
+    return _advance(db, state, State.NEEDS_ATTENTION, "not_hired")
+
+
+def onboarding_node(db: Session, state: NodeState) -> NodeState:
+    """A8 — generate the onboarding kit for a hired candidate, then ONBOARDING."""
+    app_id = state["application_id"]
+    attempt = state.get("attempt", 1)
+    app_row = db.get(Application, app_id)
+    payload = dict(app_row.payload) if app_row is not None else {}
+
+    job = db.get(Job, app_row.job_id) if app_row is not None else None
+    role_title = job.title if job is not None else "New role"
+    department = job.department if job is not None else None
+    candidate_name = (payload.get("cv") or {}).get("full_name") or None
+
+    def _work() -> dict[str, Any]:
+        kit = generate_onboarding_kit(
+            role_title=role_title,
+            department=department,
+            candidate_name=candidate_name,
+            user_id=str(app_id),
+        )
+        return kit.model_dump()
+
+    try:
+        kit = with_ledger(db, app_id, "onboarding", attempt, _work)
+    except OnboardingError as exc:
+        db.add(
+            ApplicationEvent(
+                application_id=app_id,
+                kind="onboarding_failed",
+                step="onboarding",
+                attempt=attempt,
+                payload={"error": str(exc)},
+            )
+        )
+        return _advance(db, state, State.NEEDS_ATTENTION, "onboarding_failed")
+
+    if app_row is not None:
+        app_row.payload = {**app_row.payload, "onboarding": kit}
+    return _advance(db, state, State.ONBOARDING, "onboarding")
