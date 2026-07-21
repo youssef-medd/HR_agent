@@ -9,8 +9,7 @@ differ only in identity fields produce byte-identical masked views, so an
 identity swap cannot change the score.
 """
 
-from __future__ import annotations
-
+import re
 from typing import Any
 
 from orchestrator.agents.parser import CVData
@@ -18,11 +17,27 @@ from orchestrator.agents.parser import CVData
 # Dropped entirely (by omission below) — pure identity/contact, no bearing on
 # fit: full_name, email, phone, location.
 
+# Free-text fields (summaries) can still leak identity/contact and precise dates
+# of birth. Scrub them (ADR-004): email addresses, and day-precision dates —
+# which is where a DOB hides — are redacted, keeping only job-relevant signal.
+# Year-only ranges like "2019-2024" have a single separator and are preserved so
+# experience durations stay legible.
+_EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+_DAY_DATE = re.compile(r"\b\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}\b")
+
+
+def _scrub(text: str) -> str:
+    if not text:
+        return text
+    text = _EMAIL.sub("[email]", text)
+    text = _DAY_DATE.sub("[date]", text)
+    return text
+
 
 def mask_cv(cv: CVData) -> dict[str, Any]:
     """Project a parsed CV onto the identity-blind view the judge is allowed to see."""
     return {
-        "summary": cv.summary,
+        "summary": _scrub(cv.summary),
         "skills": list(cv.skills),
         "languages": list(cv.languages),
         "years_experience": cv.years_experience,
@@ -31,7 +46,7 @@ def mask_cv(cv: CVData) -> dict[str, Any]:
                 "title": e.title,
                 "start": e.start,
                 "end": e.end,
-                "summary": e.summary,
+                "summary": _scrub(e.summary),
                 # company kept: it describes the role context, not the candidate.
                 "company": e.company,
             }

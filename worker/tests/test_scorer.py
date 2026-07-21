@@ -51,6 +51,44 @@ def test_mask_is_identity_swap_invariant():
     assert a == b
 
 
+def test_mask_scrubs_freetext_contact_and_dob():
+    # ADR-004: email and day-precision dates (a DOB hides here) are scrubbed from
+    # free-text summaries; year-only ranges survive.
+    masked = mask_cv(
+        _cv(
+            summary="Reach me at jane@x.com. Born 12/05/1994. Active 2019-2024.",
+            experiences=[{"title": "Dev", "company": "Acme", "start": "2019", "end": "2024",
+                          "summary": "Contact bob@y.io"}],
+        )
+    )
+    assert "jane@x.com" not in masked["summary"]
+    assert "12/05/1994" not in masked["summary"]
+    assert "2019-2024" in masked["summary"]  # duration preserved
+    assert "bob@y.io" not in masked["experiences"][0]["summary"]
+
+
+def test_score_reversed_order_rank_invariance(monkeypatch):
+    # ADR-005: single-candidate scoring is order-invariant — scoring a batch
+    # forward vs reversed preserves each profile's score (rank correlation 1.0).
+    def fake_llm_call(*, profile, messages, schema, **_):
+        content = messages[1]["content"]
+        n = content.count("python")  # stable per profile, distinct across profiles
+        return ScoreResult(
+            overall=0, skills_match=min(100, 30 + n * 10),
+            experience_match=50, education_match=50,
+        )
+
+    monkeypatch.setattr(scorer_mod, "llm_call", fake_llm_call)
+
+    profiles = [{"skills": ["python"] * k} for k in range(1, 6)]
+    forward = [score_candidate(p, "jd").overall for p in profiles]
+    reversed_scores = [score_candidate(p, "jd").overall for p in reversed(profiles)]
+    realigned = list(reversed(reversed_scores))
+
+    assert forward == realigned  # identical => Spearman rank correlation = 1.0
+    assert len(set(forward)) == len(forward)  # profiles genuinely distinct
+
+
 def test_score_candidate_uses_judge_profile(monkeypatch):
     captured: dict = {}
 

@@ -278,6 +278,26 @@ Sprint 0-1 (ADR-013) delivered the foundation slice: FastAPI, JWT auth, LLM gate
 
 ---
 
+## ADR-015 · Extended masking + positional-bias probe — accepted & implemented
+
+**Date**: 2026-07-16
+**Status**: Accepted — closes ADR-004 and ADR-005
+
+### Context
+ADR-004 (extended masking) and ADR-005 (positional-bias probe) were recorded as *Proposed*. The masking layer (`agents/masking.py`) and single-candidate scoring (`agents/scorer.py`) are now in place, so both are ratified with the scope actually shipped.
+
+### Decision
+- **Masking (ADR-004)**: `mask_cv` drops name/email/phone/location, redacts institution proper names, and now scrubs free-text summaries — email addresses and day-precision dates (where a DOB hides) are redacted, while single-separator year ranges (e.g. `2019-2024`) are preserved so experience durations stay legible. Postal-code and dedicated hobbies/associations redaction are deferred until the parser emits those as discrete fields (today they only exist inside free text, which the scrub already covers for contact/DOB).
+- **Bias probe (ADR-005)**: single-candidate scoring is enforced (one profile per judge prompt), and a CI test (`test_score_reversed_order_rank_invariance`) asserts forward-vs-reversed scoring preserves each profile's score (rank correlation 1.0 ≥ 0.95). The identity-swap invariance test remains.
+
+### Consequences
+- ADR-004 and ADR-005 are Accepted. Two new invariance tests guard the properties in CI (`worker/tests/test_scorer.py`).
+
+### References
+- Closes ADR-004, ADR-005.
+
+---
+
 ## Template
 
 ```
