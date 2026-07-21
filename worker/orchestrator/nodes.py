@@ -184,17 +184,34 @@ def pool_node(db: Session, state: NodeState) -> NodeState:
 
 
 def send_confirmation_node(db: Session, state: NodeState) -> NodeState:
-    """Non-sensitive notification — goes through the ledger, no gate."""
+    """Non-sensitive acknowledgement — goes through the ledger, no gate.
 
-    app_row = db.get(Application, state["application_id"])
-    recipient = (app_row.candidate_ref if app_row is not None else "unknown@example.com")
+    Best-effort: the confirmation is a courtesy, not a pipeline dependency, so a
+    delivery failure (e.g. a WhatsApp candidate outside the 24h window, or a bad
+    address) is logged and swallowed — it must never block scoring/shortlisting.
+    """
+    app_id = state["application_id"]
+    attempt = state.get("attempt", 1)
+    app_row = db.get(Application, app_id)
+    recipient = app_row.candidate_ref if app_row is not None else "unknown@example.com"
 
     def _work() -> dict[str, Any]:
-        return _send_confirmation_impl(state["application_id"], recipient)
+        return _send_confirmation_impl(app_id, recipient)
 
-    with_ledger(
-        db, state["application_id"], "send_confirmation", state.get("attempt", 1), _work
-    )
+    try:
+        with_ledger(db, app_id, "send_confirmation", attempt, _work)
+    except Exception as exc:  # noqa: BLE001 — courtesy send must not brick the graph
+        db.rollback()
+        db.add(
+            ApplicationEvent(
+                application_id=app_id,
+                kind="confirmation_failed",
+                step="send_confirmation",
+                attempt=attempt,
+                payload={"error": str(exc)},
+            )
+        )
+        db.commit()
     return state
 
 

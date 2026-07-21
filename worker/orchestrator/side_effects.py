@@ -86,15 +86,32 @@ def _sent_log_snapshot() -> list[dict[str, Any]]:
     return list(_SENT)
 
 
+def _looks_like_email(recipient: str) -> bool:
+    return "@" in (recipient or "")
+
+
+def _deliver_notification(recipient: str, subject: str, body: str) -> tuple[str, str | None]:
+    """Route a candidate notification by channel.
+
+    Email when the recipient is an email address, otherwise WhatsApp (the
+    candidate came in through the phone/WhatsApp channel). Returns
+    (channel, provider_message_id). Raises the transport's own error on failure.
+    """
+    if _looks_like_email(recipient):
+        return "email", send_email(recipient, subject, body)
+    return "whatsapp", _wa_deliver(recipient, body)
+
+
 def _send_rejection_impl(application_id: int, recipient: str, template: str) -> dict[str, Any]:
     subject, body = render_email(template or "rejection")
-    email_id = send_email(recipient, subject, body)
+    channel, message_id = _deliver_notification(recipient, subject, body)
     entry = {
         "kind": "rejection",
         "application_id": application_id,
         "recipient": recipient,
         "template": template,
-        "email_id": email_id,
+        "channel": channel,
+        "message_id": message_id,
     }
     _SENT.append(entry)
     return entry
@@ -102,13 +119,14 @@ def _send_rejection_impl(application_id: int, recipient: str, template: str) -> 
 
 def _send_offer_impl(application_id: int, recipient: str, template: str) -> dict[str, Any]:
     subject, body = render_email(template or "offer")
-    email_id = send_email(recipient, subject, body)
+    channel, message_id = _deliver_notification(recipient, subject, body)
     entry = {
         "kind": "offer",
         "application_id": application_id,
         "recipient": recipient,
         "template": template,
-        "email_id": email_id,
+        "channel": channel,
+        "message_id": message_id,
     }
     _SENT.append(entry)
     return entry
@@ -116,12 +134,13 @@ def _send_offer_impl(application_id: int, recipient: str, template: str) -> dict
 
 def _send_confirmation_impl(application_id: int, recipient: str) -> dict[str, Any]:
     subject, body = render_email("confirmation")
-    email_id = send_email(recipient, subject, body)
+    channel, message_id = _deliver_notification(recipient, subject, body)
     entry = {
         "kind": "confirmation",
         "application_id": application_id,
         "recipient": recipient,
-        "email_id": email_id,
+        "channel": channel,
+        "message_id": message_id,
     }
     _SENT.append(entry)
     return entry

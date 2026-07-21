@@ -118,7 +118,23 @@ def test_sender_impls_render_and_log(monkeypatch):
     rej = _send_rejection_impl(1, "cand@x.io", "rejection@v1")
     off = _send_offer_impl(2, "cand2@x.io", "offer@v1")
 
-    assert rej["kind"] == "rejection" and rej["email_id"] is None
-    assert off["kind"] == "offer"
+    assert rej["kind"] == "rejection" and rej["channel"] == "email" and rej["message_id"] is None
+    assert off["kind"] == "offer" and off["channel"] == "email"
     assert sent[0][0] == "cand@x.io" and sent[0][1] == "Update on your application"
     assert sent[1][1] == "Your offer"
+
+
+def test_notification_routes_to_whatsapp_for_phone(monkeypatch):
+    # A phone-number candidate_ref must NOT be emailed — it routes to WhatsApp.
+    from orchestrator.side_effects import _send_confirmation_impl
+
+    monkeypatch.delenv("WHATSAPP_TOKEN", raising=False)  # stub mode, no real send
+    monkeypatch.delenv("WHATSAPP_PHONE_ID", raising=False)
+    called = {"email": False}
+    monkeypatch.setattr(side_effects, "send_email", lambda *a, **k: called.__setitem__("email", True))
+
+    _sent_log_reset()
+    entry = _send_confirmation_impl(1, "21693008267")
+
+    assert entry["channel"] == "whatsapp"
+    assert called["email"] is False  # never tried to email a phone number
