@@ -38,5 +38,8 @@ class Settings(BaseSettings):
     whatsapp_app_secret: str = Field(default="", alias="WHATSAPP_APP_SECRET")
     whatsapp_api_version: str = Field(default="v23.0", alias="WHATSAPP_API_VERSION")
 
+    # Cal.com booking webhook (A6). Empty secret disables signature verification.
+    calcom_webhook_secret: str = Field(default="", alias="CALCOM_WEBHOOK_SECRET")
+
 
 settings = Settings()  # type: ignore[call-arg]

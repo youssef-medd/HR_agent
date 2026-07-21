@@ -34,13 +34,17 @@ class SchedulerError(RuntimeError):
 
 
 def booking_link(application_id: int) -> str:
-    """Deterministic Cal.com booking link for an application.
+    """Cal.com booking link for an application.
 
-    Real link creation via the Cal.com API is a later slice; for now the link is
-    derived from `CALCOM_URL` so the stub transport has something to send.
+    When `CALCOM_URL` is set (the recruiter's real Cal.com booking page), the
+    application id is attached as booking metadata so the Cal.com
+    `BOOKING_CREATED` webhook can map the confirmation back to this application.
+    Without it, a self-describing stub link is used so offline runs still work.
     """
-    base = os.environ.get("CALCOM_URL") or _DEFAULT_CALCOM_URL
-    return f"{base.rstrip('/')}/book/{application_id}"
+    base = os.environ.get("CALCOM_URL")
+    if base:
+        return f"{base.rstrip('/')}?metadata[application_id]={application_id}"
+    return f"{_DEFAULT_CALCOM_URL}/book/{application_id}"
 
 
 def booking_prompt(link: str) -> str:

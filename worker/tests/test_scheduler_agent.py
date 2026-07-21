@@ -14,8 +14,8 @@ from orchestrator.agents.scheduler import (
 
 
 def test_booking_link_uses_calcom_url(monkeypatch):
-    monkeypatch.setenv("CALCOM_URL", "https://cal.example.com/")
-    assert booking_link(42) == "https://cal.example.com/book/42"
+    monkeypatch.setenv("CALCOM_URL", "https://cal.com/welyne/interview")
+    assert booking_link(42) == "https://cal.com/welyne/interview?metadata[application_id]=42"
 
 
 def test_booking_link_falls_back_without_env(monkeypatch):
