@@ -92,6 +92,19 @@ export interface AttentionItem {
   created_at: string;
 }
 
+export interface TimelineEntry {
+  state: string;
+  at: string;
+}
+
+export interface TrackedApplication {
+  id: number;
+  state: string;
+  job_title: string | null;
+  created_at: string;
+  timeline: TimelineEntry[];
+}
+
 export interface OnboardingTask {
   when: string;
   task: string;

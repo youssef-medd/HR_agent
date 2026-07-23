@@ -87,3 +87,47 @@ def test_apply_rejects_bad_extension(client):
         files={"file": ("cv.exe", b"data", "application/octet-stream")},
     )
     assert resp.status_code == 415
+
+
+def _seed_tracked(client) -> int:
+    from app.db import get_db
+    from app.models.application import Application
+    from app.models.application_event import ApplicationEvent
+    from app.models.job import Job
+
+    db_gen = client.app.dependency_overrides[get_db]()
+    db = next(db_gen)
+    try:
+        db.add(Job(id=1, title="Backend Engineer", status="published"))
+        row = Application(job_id=1, candidate_ref="Jane@X.io", state="SCORED", payload={})
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        for to in ("PARSED", "SCORED"):
+            db.add(ApplicationEvent(application_id=row.id, kind="transition", to_state=to, step=to.lower()))
+        db.commit()
+        return row.id
+    finally:
+        db.close()
+
+
+def test_track_returns_status_and_timeline(client):
+    app_id = _seed_tracked(client)
+    # email match is case-insensitive
+    resp = client.get("/public/track", params={"email": "jane@x.io", "application_id": app_id})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["state"] == "SCORED"
+    assert body["job_title"] == "Backend Engineer"
+    assert [t["state"] for t in body["timeline"]] == ["PARSED", "SCORED"]
+
+
+def test_track_wrong_email_404(client):
+    app_id = _seed_tracked(client)
+    resp = client.get("/public/track", params={"email": "someone@else.io", "application_id": app_id})
+    assert resp.status_code == 404
+
+
+def test_track_missing_application_404(client):
+    resp = client.get("/public/track", params={"email": "jane@x.io", "application_id": 99999})
+    assert resp.status_code == 404

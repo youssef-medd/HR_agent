@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.application import Application
+from app.models.application_event import ApplicationEvent
 from app.models.job import Job
 from app.queue import enqueue_application_step
 
@@ -41,6 +42,19 @@ class PublicJobView(BaseModel):
 class PublicApplicationCreated(BaseModel):
     application_id: int
     state: str
+
+
+class TimelineEntry(BaseModel):
+    state: str
+    at: str
+
+
+class TrackedApplication(BaseModel):
+    id: int
+    state: str
+    job_title: str | None = None
+    created_at: str
+    timeline: list[TimelineEntry]
 
 
 def _to_public(job: Job) -> PublicJobView:
@@ -121,3 +135,46 @@ async def apply(
 
     enqueue_application_step(row.id)
     return PublicApplicationCreated(application_id=row.id, state=row.state)
+
+
+@router.get("/track", response_model=TrackedApplication)
+def track_application(
+    email: str,
+    application_id: int,
+    db: Annotated[Session, Depends(get_db)],
+) -> TrackedApplication:
+    """Candidate self-service tracking: status + timeline for one application.
+
+    Identified by application id + the email it was submitted with (matched
+    against `candidate_ref`, case-insensitive). A mismatch is a flat 404 so the
+    endpoint never confirms which of the two was wrong.
+    """
+    row = db.get(Application, application_id)
+    if row is None or row.candidate_ref.strip().lower() != email.strip().lower():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No application found for that email and reference",
+        )
+
+    job = db.get(Job, row.job_id)
+    events = db.scalars(
+        select(ApplicationEvent)
+        .where(
+            ApplicationEvent.application_id == application_id,
+            ApplicationEvent.kind == "transition",
+        )
+        .order_by(ApplicationEvent.created_at)
+    ).all()
+    timeline = [
+        TimelineEntry(state=e.to_state, at=e.created_at.isoformat())
+        for e in events
+        if e.to_state
+    ]
+
+    return TrackedApplication(
+        id=row.id,
+        state=row.state,
+        job_title=job.title if job is not None else None,
+        created_at=row.created_at.isoformat(),
+        timeline=timeline,
+    )

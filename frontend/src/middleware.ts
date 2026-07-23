@@ -11,8 +11,12 @@ export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   const isLogin = pathname === "/login";
-  // The candidate apply flow is public — no session required.
-  const isPublic = pathname === "/apply" || pathname.startsWith("/apply/");
+  // The candidate flows (apply + track) are public — no session required.
+  const isPublic =
+    pathname === "/apply" ||
+    pathname.startsWith("/apply/") ||
+    pathname === "/portal" ||
+    pathname.startsWith("/portal/");
 
   if (!hasSession && !isLogin && !isPublic) {
     const url = request.nextUrl.clone();

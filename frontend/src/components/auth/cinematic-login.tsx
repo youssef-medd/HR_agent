@@ -326,26 +326,40 @@ export function CinematicLogin() {
               >
                 <div className="space-y-1">
                   <h1 className="text-4xl font-bold tracking-tight text-white">
-                    Almost there
+                    Candidate portal
                   </h1>
                   <p className="text-lg font-light text-white/60">
-                    The candidate portal is on its way
+                    Apply to a role or track your application
                   </p>
                 </div>
 
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-sm leading-relaxed text-white/60 backdrop-blur-[2px]">
-                  Soon you&apos;ll track your application, chat with the pre-screening
-                  assistant and book interviews here. For now, applications are handled by
-                  the recruiting team — reach them at{" "}
+                <div className="space-y-3">
+                  <Link
+                    href="/apply"
+                    className="bg-primary hover:bg-primary/90 block w-full rounded-full py-3 font-medium text-white transition-colors duration-200"
+                  >
+                    Browse open roles &amp; apply
+                  </Link>
+                  <Link
+                    href="/portal"
+                    className="block w-full rounded-full border border-white/15 bg-white/5 py-3 font-medium text-white/80 transition-colors duration-200 hover:bg-white/10 hover:text-white"
+                  >
+                    Track my application
+                  </Link>
+                </div>
+
+                <p className="text-xs leading-relaxed text-white/40">
+                  Web chat pre-screening and interview booking are coming here soon. Questions?
+                  Reach the team at{" "}
                   <Link
                     href="https://welyne.com"
                     target="_blank"
-                    className="text-white underline decoration-white/30 transition-colors hover:decoration-white"
+                    className="text-white/70 underline decoration-white/30 transition-colors hover:decoration-white"
                   >
                     welyne.com
                   </Link>
                   .
-                </div>
+                </p>
 
                 <button
                   onClick={() => setStep("role")}

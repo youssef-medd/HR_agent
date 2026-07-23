@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -13,6 +14,7 @@ const ACCEPT = ".pdf,.docx,.txt,.md";
 export function ApplyForm({ jobId, jobTitle }: { jobId: number; jobTitle: string }) {
   const [pending, setPending] = React.useState(false);
   const [done, setDone] = React.useState(false);
+  const [appId, setAppId] = React.useState<number | null>(null);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -43,6 +45,8 @@ export function ApplyForm({ jobId, jobTitle }: { jobId: number; jobTitle: string
       return;
     }
 
+    const body = await res.json().catch(() => null);
+    setAppId(typeof body?.application_id === "number" ? body.application_id : null);
     setDone(true);
   }
 
@@ -53,8 +57,18 @@ export function ApplyForm({ jobId, jobTitle }: { jobId: number; jobTitle: string
         <p className="font-medium">Application received</p>
         <p className="text-muted-foreground text-sm">
           Thanks for applying to <span className="font-medium">{jobTitle}</span>. Our team will
-          review your CV and reach out. You can close this page.
+          review your CV and reach out.
         </p>
+        {appId !== null && (
+          <p className="text-muted-foreground text-sm">
+            Your reference is <span className="text-foreground font-semibold">#{appId}</span> — track
+            your status any time at{" "}
+            <Link href="/portal" className="text-primary underline">
+              the candidate portal
+            </Link>
+            .
+          </p>
+        )}
       </div>
     );
   }
