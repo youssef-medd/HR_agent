@@ -19,9 +19,6 @@ import {
   Layers,
   UserRound,
 } from "lucide-react";
-import { Resizable } from "react-resizable";
-import "react-resizable/css/styles.css";
-
 import { StateBadge } from "@/components/shell/state-badge";
 import type { ApplicationSummary } from "@/lib/api/client";
 import { type ApplicationState } from "@/lib/mocks/types";
@@ -126,18 +123,14 @@ export function CandidatesTable({ rows }: { rows: ApplicationSummary[] }) {
   const [sortOpen, setSortOpen] = React.useState(false);
   const [exportOpen, setExportOpen] = React.useState(false);
 
-  const [widths, setWidths] = React.useState<Record<string, number>>({
+  const widths: Record<string, number> = {
     check: 44,
     candidate: 220,
     job: 110,
     score: 210,
     stage: 160,
     applied: 110,
-  });
-
-  function onResize(key: string, size: { width: number }) {
-    setWidths((w) => ({ ...w, [key]: Math.max(80, Math.min(420, size.width)) }));
-  }
+  };
 
   function toggleSort(field: SortField) {
     if (sortField === field) {
@@ -235,10 +228,6 @@ export function CandidatesTable({ rows }: { rows: ApplicationSummary[] }) {
     },
   };
 
-  const resizeHandle = (
-    <div className="hover:bg-primary/50 absolute top-2 -right-px bottom-2 z-10 w-1 cursor-col-resize rounded-full bg-transparent transition-colors" />
-  );
-
   const headCell =
     "text-muted-foreground relative flex shrink-0 items-center gap-1.5 px-3 text-xs font-medium";
 
@@ -316,50 +305,22 @@ export function CandidatesTable({ rows }: { rows: ApplicationSummary[] }) {
                   onChange={toggleAll}
                 />
               </div>
-              <Resizable
-                width={widths.candidate}
-                height={0}
-                onResize={(_, d) => onResize("candidate", d.size)}
-                handle={resizeHandle}
-              >
-                <div className={headCell} style={{ width: widths.candidate }}>
-                  <UserRound className="size-3.5 opacity-50" aria-hidden />
-                  Candidate
-                </div>
-              </Resizable>
-              <Resizable
-                width={widths.job}
-                height={0}
-                onResize={(_, d) => onResize("job", d.size)}
-                handle={resizeHandle}
-              >
-                <div className={headCell} style={{ width: widths.job }}>
-                  <Briefcase className="size-3.5 opacity-50" aria-hidden />
-                  Job
-                </div>
-              </Resizable>
-              <Resizable
-                width={widths.score}
-                height={0}
-                onResize={(_, d) => onResize("score", d.size)}
-                handle={resizeHandle}
-              >
-                <div className={headCell} style={{ width: widths.score }}>
-                  <Gauge className="size-3.5 opacity-50" aria-hidden />
-                  Score
-                </div>
-              </Resizable>
-              <Resizable
-                width={widths.stage}
-                height={0}
-                onResize={(_, d) => onResize("stage", d.size)}
-                handle={resizeHandle}
-              >
-                <div className={headCell} style={{ width: widths.stage }}>
-                  <Layers className="size-3.5 opacity-50" aria-hidden />
-                  Stage
-                </div>
-              </Resizable>
+              <div className={headCell} style={{ width: widths.candidate }}>
+                <UserRound className="size-3.5 opacity-50" aria-hidden />
+                Candidate
+              </div>
+              <div className={headCell} style={{ width: widths.job }}>
+                <Briefcase className="size-3.5 opacity-50" aria-hidden />
+                Job
+              </div>
+              <div className={headCell} style={{ width: widths.score }}>
+                <Gauge className="size-3.5 opacity-50" aria-hidden />
+                Score
+              </div>
+              <div className={headCell} style={{ width: widths.stage }}>
+                <Layers className="size-3.5 opacity-50" aria-hidden />
+                Stage
+              </div>
               <div className={headCell} style={{ width: widths.applied }}>
                 <CalendarDays className="size-3.5 opacity-50" aria-hidden />
                 Applied
