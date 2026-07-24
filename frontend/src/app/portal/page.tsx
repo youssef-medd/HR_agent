@@ -4,6 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { ArrowLeft, Loader2, Search } from "lucide-react";
 
+import { PrescreenChat } from "@/components/portal/prescreen-chat";
 import { StateBadge } from "@/components/shell/state-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -123,6 +124,12 @@ export default function PortalPage() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {result && result.state === "PRESCREENING" && (
+        <div className="mt-6">
+          <PrescreenChat email={email.trim()} appId={result.id} />
+        </div>
       )}
     </main>
   );

@@ -70,7 +70,7 @@ def test_prescreen_happy_path(db_factory, monkeypatch):
 
     _sent_log_reset()
     graph = build_graph(db_factory, memory_saver())
-    app_id = _seed(db_factory)
+    app_id = _seed(db_factory, phone="21600000000")  # phone present -> WhatsApp channel
     config = {"configurable": {"thread_id": str(app_id)}}
 
     # Runs the pipeline; pauses at the consent interrupt.
@@ -107,7 +107,7 @@ def test_prescreen_no_consent_routes_to_needs_attention(db_factory, monkeypatch)
 
     _sent_log_reset()
     graph = build_graph(db_factory, memory_saver())
-    app_id = _seed(db_factory)
+    app_id = _seed(db_factory, phone="21600000000")
     config = {"configurable": {"thread_id": str(app_id)}}
 
     graph.invoke({"application_id": app_id, "stage": "RECEIVED", "attempt": 1}, config=config)
@@ -122,3 +122,43 @@ def test_prescreen_no_consent_routes_to_needs_attention(db_factory, monkeypatch)
     # No question was ever sent — only the consent prompt.
     sent = [s for s in _sent_log_snapshot() if s["kind"] == "whatsapp"]
     assert len(sent) == 1
+
+
+def test_prescreen_web_channel_uses_transcript_not_whatsapp(db_factory, monkeypatch):
+    from orchestrator import nodes
+
+    _stub_pipeline(monkeypatch)
+    monkeypatch.setattr(nodes, "interpret_consent", lambda msg, **_: ConsentInterpretation(consent=True))
+    monkeypatch.setattr(
+        nodes, "interpret_answer",
+        lambda q, msg, **_: AnswerInterpretation(answer=msg, answered=True),
+    )
+
+    _sent_log_reset()
+    graph = build_graph(db_factory, memory_saver())
+    app_id = _seed(db_factory)  # no phone -> web channel
+    config = {"configurable": {"thread_id": str(app_id)}}
+
+    graph.invoke({"application_id": app_id, "stage": "RECEIVED", "attempt": 1}, config=config)
+    # transcript carries the consent prompt while paused; nothing sent on WhatsApp
+    with db_factory() as db:
+        block = db.get(Application, app_id).payload["prescreen"]
+        assert block["channel"] == "web"
+        assert block["transcript"][0]["role"] == "assistant"
+        assert block["transcript"][0]["text"].startswith("Hello")
+
+    graph.invoke(Command(resume={"candidate_message": "yes"}), config=config)
+    graph.invoke(Command(resume={"candidate_message": "6 years"}), config=config)
+    result = graph.invoke(Command(resume={"candidate_message": "1 month"}), config=config)
+
+    assert result["stage"] == "PRESCREENED"
+    with db_factory() as db:
+        block = db.get(Application, app_id).payload["prescreen"]
+        assert block["status"] == "done"
+        roles = [m["role"] for m in block["transcript"]]
+        # consent + 2 questions from assistant, 3 replies from user, + closing line
+        assert roles.count("user") == 3
+        assert "1 month" in [m["text"] for m in block["transcript"]]
+
+    # Web channel never touches WhatsApp.
+    assert [s for s in _sent_log_snapshot() if s["kind"] == "whatsapp"] == []

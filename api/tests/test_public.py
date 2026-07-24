@@ -137,3 +137,82 @@ def test_track_wrong_email_404(client):
 def test_track_missing_application_404(client):
     resp = client.get("/public/track", params={"email": "jane@x.io", "application_id": 99999})
     assert resp.status_code == 404
+
+
+def _seed_prescreening(client) -> int:
+    from app.db import get_db
+    from app.models.application import Application
+
+    db_gen = client.app.dependency_overrides[get_db]()
+    db = next(db_gen)
+    try:
+        row = Application(
+            job_id=1,
+            candidate_ref="cand@x.io",
+            state="PRESCREENING",
+            payload={
+                "prescreen": {
+                    "status": "awaiting_consent",
+                    "channel": "web",
+                    "transcript": [{"role": "assistant", "text": "Do you consent?"}],
+                }
+            },
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row.id
+    finally:
+        db.close()
+
+
+def test_prescreen_view_returns_transcript(client):
+    app_id = _seed_prescreening(client)
+    resp = client.get("/public/prescreen", params={"email": "cand@x.io", "application_id": app_id})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["channel"] == "web"
+    assert body["awaiting"] is True and body["done"] is False
+    assert body["transcript"][0]["text"] == "Do you consent?"
+
+
+def test_prescreen_view_wrong_email_404(client):
+    app_id = _seed_prescreening(client)
+    resp = client.get("/public/prescreen", params={"email": "no@one.io", "application_id": app_id})
+    assert resp.status_code == 404
+
+
+def test_prescreen_reply_enqueues(client, monkeypatch):
+    from app.routers import public as public_router
+
+    enqueued: list = []
+    monkeypatch.setattr(public_router, "enqueue_application_step", lambda *a, **k: enqueued.append(a))
+
+    app_id = _seed_prescreening(client)
+    resp = client.post(
+        "/public/prescreen/reply",
+        json={"email": "cand@x.io", "application_id": app_id, "message": "yes"},
+    )
+    assert resp.status_code == 200
+    assert enqueued == [(app_id, {"candidate_message": "yes"})]
+
+
+def test_prescreen_reply_wrong_state_409(client):
+    from app.db import get_db
+    from app.models.application import Application
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        row = Application(job_id=1, candidate_ref="c@x.io", state="SCORED", payload={})
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        app_id = row.id
+    finally:
+        db.close()
+
+    resp = client.post(
+        "/public/prescreen/reply",
+        json={"email": "c@x.io", "application_id": app_id, "message": "hi"},
+    )
+    assert resp.status_code == 409

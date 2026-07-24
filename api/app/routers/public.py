@@ -180,3 +180,80 @@ def track_application(
         created_at=row.created_at.isoformat(),
         timeline=timeline,
     )
+
+
+# --- A5 web-chat pre-screening (candidate portal channel) -------------------
+
+_AWAITING_STATUSES = {"awaiting_consent", "asking"}
+
+
+class PrescreenMessage(BaseModel):
+    role: str
+    text: str
+
+
+class PrescreenView(BaseModel):
+    state: str
+    status: str
+    channel: str
+    transcript: list[PrescreenMessage]
+    awaiting: bool  # the assistant is waiting on the candidate's reply
+    done: bool
+
+
+class PrescreenReplyIn(BaseModel):
+    email: str
+    application_id: int
+    message: str
+
+
+def _verify_candidate(db: Session, application_id: int, email: str) -> Application:
+    row = db.get(Application, application_id)
+    if row is None or row.candidate_ref.strip().lower() != email.strip().lower():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No application found for that email and reference",
+        )
+    return row
+
+
+@router.get("/prescreen", response_model=PrescreenView)
+def prescreen_view(
+    email: str,
+    application_id: int,
+    db: Annotated[Session, Depends(get_db)],
+) -> PrescreenView:
+    """Candidate's web pre-screening chat: transcript + whose turn it is."""
+    row = _verify_candidate(db, application_id, email)
+    block = (row.payload.get("prescreen") or {}) if isinstance(row.payload, dict) else {}
+    status_str = block.get("status") or ""
+    transcript = [
+        PrescreenMessage(role=m.get("role", ""), text=m.get("text", ""))
+        for m in (block.get("transcript") or [])
+    ]
+    done = row.state != "PRESCREENING" or status_str == "done"
+    awaiting = row.state == "PRESCREENING" and status_str in _AWAITING_STATUSES
+    return PrescreenView(
+        state=row.state,
+        status=status_str,
+        channel=block.get("channel") or "web",
+        transcript=transcript,
+        awaiting=awaiting,
+        done=done,
+    )
+
+
+@router.post("/prescreen/reply", response_model=PrescreenView)
+def prescreen_reply(
+    body: PrescreenReplyIn,
+    db: Annotated[Session, Depends(get_db)],
+) -> PrescreenView:
+    """Candidate answers in the web chat — resumes the paused A5 graph."""
+    row = _verify_candidate(db, body.application_id, body.email)
+    if row.state != "PRESCREENING":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This application is not awaiting a pre-screening reply",
+        )
+    enqueue_application_step(body.application_id, {"candidate_message": body.message})
+    return prescreen_view(email=body.email, application_id=body.application_id, db=db)

@@ -128,6 +128,20 @@ export interface TimelineEntry {
   at: string;
 }
 
+export interface PrescreenMessage {
+  role: string;
+  text: string;
+}
+
+export interface PrescreenView {
+  state: string;
+  status: string;
+  channel: string;
+  transcript: PrescreenMessage[];
+  awaiting: boolean;
+  done: boolean;
+}
+
 export interface TrackedApplication {
   id: number;
   state: string;

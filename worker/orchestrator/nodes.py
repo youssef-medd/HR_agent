@@ -266,18 +266,32 @@ def _candidate_message(resume: Any) -> str:
     return str(resume)
 
 
+def _save_payload_key(db: Session, application_id: int, key: str, block: dict[str, Any]) -> None:
+    """Persist one payload key from an INDEPENDENT session.
+
+    Payload writes committed on the node's own session do not survive when the
+    node later raises `interrupt()` (LangGraph replays the node and the pause
+    discards the in-flight session's work). A fresh session bound to the same
+    engine commits in its own transaction, so mid-conversation state (chat
+    transcript, answers, booking link) is durable while the graph is paused.
+    """
+    with Session(bind=db.get_bind()) as s:
+        row = s.get(Application, application_id)
+        if row is not None:
+            row.payload = {**row.payload, key: block}
+            s.commit()
+
+
 def _save_prescreen(db: Session, application_id: int, block: dict[str, Any]) -> None:
-    row = db.get(Application, application_id)
-    if row is not None:
-        row.payload = {**row.payload, "prescreen": block}
-        db.commit()
+    _save_payload_key(db, application_id, "prescreen", block)
 
 
 def _save_interview(db: Session, application_id: int, block: dict[str, Any]) -> None:
-    row = db.get(Application, application_id)
-    if row is not None:
-        row.payload = {**row.payload, "interview": block}
-        db.commit()
+    _save_payload_key(db, application_id, "interview", block)
+
+
+def _resolve_phone(payload: dict[str, Any]) -> str:
+    return (payload.get("phone") or (payload.get("cv") or {}).get("phone") or "").strip()
 
 
 def _whatsapp_recipient(app_row: Application | None, payload: dict[str, Any]) -> str:
@@ -289,8 +303,16 @@ def _whatsapp_recipient(app_row: Application | None, payload: dict[str, Any]) ->
     """
     if app_row is None:
         return "unknown"
-    phone = (payload.get("phone") or (payload.get("cv") or {}).get("phone") or "").strip()
-    return phone or app_row.candidate_ref
+    return _resolve_phone(payload) or app_row.candidate_ref
+
+
+def _prescreen_channel(payload: dict[str, Any]) -> str:
+    """A5 delivery channel: WhatsApp when a real phone is on file, else web chat.
+
+    Web candidates (apply form / email intake with no phone) pre-screen through
+    the candidate portal; the transcript on the payload is the delivery surface.
+    """
+    return "whatsapp" if _resolve_phone(payload) else "web"
 
 
 def prescreen_node(db: Session, state: NodeState) -> NodeState:
@@ -314,6 +336,7 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
     app_row = db.get(Application, app_id)
     payload = dict(app_row.payload) if app_row is not None else {}
     recipient = _whatsapp_recipient(app_row, payload)
+    channel = _prescreen_channel(payload)
 
     # Keep the in-memory stage in lockstep with the DB so the final transition is
     # computed from the real current state on the completing replay.
@@ -329,19 +352,36 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
     prior_answers: list[dict[str, Any]] = list(block.get("answers") or [])
     questions = screening_questions(payload)
 
+    # Transcript is rebuilt deterministically from the resume values on every
+    # replay, so it can be regenerated fresh each turn. It is the web-chat
+    # delivery surface (read by the portal) and an audit record for WhatsApp.
+    transcript: list[dict[str, str]] = []
+    block["channel"] = channel
+
+    def _deliver(step: str, body: str) -> None:
+        """Record an assistant message and send it over WhatsApp when applicable."""
+        transcript.append({"role": "assistant", "text": body})
+        block["transcript"] = list(transcript)
+        _save_prescreen(db, app_id, block)  # persist so the web chat sees it while paused
+        if channel == "whatsapp":
+            with_ledger(
+                db, app_id, step, attempt,
+                lambda: _send_whatsapp_impl(app_id, recipient, body),
+            )
+
     # --- Consent turn -------------------------------------------------------
-    with_ledger(
-        db, app_id, "prescreen_consent", attempt,
-        lambda: _send_whatsapp_impl(app_id, recipient, CONSENT_PROMPT),
-    )
+    block.setdefault("status", "awaiting_consent")
+    _deliver("prescreen_consent", CONSENT_PROMPT)
     consent_reply = _candidate_message(
         interrupt({"kind": "await_candidate_reply", "stage": "consent", "application_id": app_id})
     )
+    transcript.append({"role": "user", "text": consent_reply})
     try:
         consent = interpret_consent(consent_reply, user_id=str(app_id))
     except PrescreenError as exc:
         block["status"] = "no_consent"
         block.setdefault("consent", {})["given"] = None
+        block["transcript"] = list(transcript)
         _save_prescreen(db, app_id, block)
         db.add(ApplicationEvent(
             application_id=app_id, kind="prescreen_failed", step="prescreen_consent",
@@ -352,6 +392,7 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
     if not consent.consent:
         block["status"] = "no_consent"
         block["consent"] = {"given": False, "at": None}
+        block["transcript"] = list(transcript)
         _save_prescreen(db, app_id, block)
         return _advance(db, state, State.NEEDS_ATTENTION, "prescreen_no_consent")
 
@@ -363,21 +404,20 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
     # --- Question turns -----------------------------------------------------
     answers: list[dict[str, Any]] = []
     for i, question in enumerate(questions):
-        with_ledger(
-            db, app_id, f"prescreen_q{i}", attempt,
-            lambda q=question: _send_whatsapp_impl(app_id, recipient, q),
-        )
+        _deliver(f"prescreen_q{i}", question)
         reply = _candidate_message(
             interrupt({
                 "kind": "await_candidate_reply", "stage": "question",
                 "idx": i, "application_id": app_id,
             })
         )
+        transcript.append({"role": "user", "text": reply})
         try:
             interp = interpret_answer(question, reply, user_id=str(app_id))
         except PrescreenError as exc:
             block["answers"] = answers
             block["status"] = "error"
+            block["transcript"] = list(transcript)
             _save_prescreen(db, app_id, block)
             db.add(ApplicationEvent(
                 application_id=app_id, kind="prescreen_failed", step=f"prescreen_q{i}",
@@ -389,8 +429,11 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
         answers.append({"q": question, "a": interp.answer, "at": answered_at})
         block["answers"] = answers
         block["idx"] = i + 1
+        block["transcript"] = list(transcript)
         _save_prescreen(db, app_id, block)
 
+    transcript.append({"role": "assistant", "text": "Thanks — that's everything. Our team will be in touch."})
+    block["transcript"] = list(transcript)
     block["status"] = "done"
     _save_prescreen(db, app_id, block)
     return _advance(db, state, State.PRESCREENED, "prescreen")
@@ -410,16 +453,25 @@ def schedule_node(db: Session, state: NodeState) -> NodeState:
     app_row = db.get(Application, app_id)
     payload = dict(app_row.payload) if app_row is not None else {}
     recipient = _whatsapp_recipient(app_row, payload)
+    channel = _prescreen_channel(payload)
 
     if app_row is not None:
         state["stage"] = app_row.state
 
     link = booking_link(app_id)
     message = booking_prompt(link)
-    with_ledger(
-        db, app_id, "send_booking_link", attempt,
-        lambda: _send_booking_link_impl(app_id, recipient, link, message),
-    )
+    # Persist the booking link so a web candidate can open it from the portal;
+    # only send over WhatsApp when a real phone is on file (an email recipient
+    # would 400 the Meta API).
+    booking_block = dict(payload.get("interview") or {})
+    booking_block["link"] = link
+    booking_block["channel"] = channel
+    _save_interview(db, app_id, booking_block)
+    if channel == "whatsapp":
+        with_ledger(
+            db, app_id, "send_booking_link", attempt,
+            lambda: _send_booking_link_impl(app_id, recipient, link, message),
+        )
     reply = _candidate_message(
         interrupt({"kind": "await_booking", "application_id": app_id, "link": link})
     )

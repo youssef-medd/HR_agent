@@ -24,7 +24,8 @@ QUESTIONS = ["Years of experience?"]
 
 
 def _seed(db_factory) -> int:
-    payload = {"cv_text": "Cand — Python", "screening_questions": QUESTIONS}
+    # phone present -> WhatsApp channel, so the booking link is sent over WhatsApp
+    payload = {"cv_text": "Cand — Python", "screening_questions": QUESTIONS, "phone": "21600000000"}
     with db_factory() as db:
         row = Application(job_id=1, candidate_ref="cand@x.io", state="RECEIVED", payload=payload)
         db.add(row)

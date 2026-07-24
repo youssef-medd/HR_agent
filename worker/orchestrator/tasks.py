@@ -68,11 +68,17 @@ def run_application_step(self, application_id: int, event: dict[str, Any]) -> di
             db_state = app_row.state if app_row is not None else None
 
         snapshot = graph.get_state(config)
-        if snapshot.next and db_state not in ("RECEIVED", None):
-            # Thread is paused at a human gate (interrupt). Resume it with the
-            # recruiter decision carried in `event` rather than restarting from
-            # START — a fresh input dict would re-run every completed node and
-            # open a second gate.
+        # A thread paused on `interrupt()` exposes the pending interrupt in
+        # `snapshot.tasks[].interrupts` (and `snapshot.interrupts`), NOT in
+        # `snapshot.next`, which is empty for an interrupt pause. Resume when
+        # either signals a live thread.
+        paused = bool(snapshot.next) or bool(getattr(snapshot, "interrupts", None)) or any(
+            getattr(t, "interrupts", None) for t in snapshot.tasks
+        )
+        if paused and db_state not in ("RECEIVED", None):
+            # Thread is paused at a human gate or a conversational interrupt.
+            # Resume with the event (recruiter decision / candidate message)
+            # rather than restarting from START.
             result = graph.invoke(Command(resume=event), config=config)
         elif snapshot.created_at is not None and db_state not in ("RECEIVED", None):
             # Thread already ran to a terminal state. Re-invocation is a no-op;
