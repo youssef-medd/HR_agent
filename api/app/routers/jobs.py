@@ -20,6 +20,7 @@ from app.db import get_db
 from app.models.application import Application
 from app.models.job import Job
 from app.models.user import User
+from app.queue import enqueue_application_step
 from app.security import require_role
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -150,3 +151,54 @@ def job_structure(
     job.spec = result.model_dump()
     db.commit()
     return result
+
+
+class ProfileImport(BaseModel):
+    raw_text: str = Field(min_length=1, max_length=40000)
+    full_name: str | None = None
+    candidate_ref: str | None = None
+
+
+class ImportedApplication(BaseModel):
+    application_id: int
+    state: str
+
+
+@router.post(
+    "/{job_id}/import-profile",
+    response_model=ImportedApplication,
+    status_code=status.HTTP_201_CREATED,
+)
+def import_profile(
+    job_id: int,
+    body: ProfileImport,
+    user: Annotated[User, Depends(require_role("admin", "recruiter"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ImportedApplication:
+    """A2 — import a sourced profile (pasted text) as a scored application.
+
+    The recruiter runs the search manually and pastes the public profile text
+    here; it flows through the same pipeline as an uploaded CV (A3 parse -> A4
+    score), tagged `source=linkedin_assist`.
+    """
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    row = Application(
+        job_id=job_id,
+        candidate_ref=body.candidate_ref or body.full_name or "sourced-profile",
+        state="RECEIVED",
+        payload={
+            "cv_text": body.raw_text,
+            "source": "linkedin_assist",
+            "applicant_name": body.full_name or "",
+            **({"jd_text": job.description} if job.description else {}),
+        },
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    enqueue_application_step(row.id)
+    return ImportedApplication(application_id=row.id, state=row.state)

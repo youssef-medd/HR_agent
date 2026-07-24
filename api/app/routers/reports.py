@@ -60,6 +60,7 @@ class JobFunnel(BaseModel):
 class ReportOverview(BaseModel):
     total_applications: int
     by_state: dict[str, int]
+    by_source: dict[str, int]
     funnel: list[FunnelStage]
     avg_score: float | None
     shortlist_rate: float
@@ -77,8 +78,11 @@ def overview(
     total = len(apps)
 
     by_state: dict[str, int] = {}
+    by_source: dict[str, int] = {}
     for a in apps:
         by_state[a.state] = by_state.get(a.state, 0) + 1
+        src = (a.payload.get("source") or "upload") if isinstance(a.payload, dict) else "upload"
+        by_source[src] = by_source.get(src, 0) + 1
 
     # Earliest transition into each state, per application, from the event log.
     events = db.execute(
@@ -169,6 +173,7 @@ def overview(
     return ReportOverview(
         total_applications=total,
         by_state=by_state,
+        by_source=by_source,
         funnel=funnel,
         avg_score=avg_score,
         shortlist_rate=shortlist_rate,

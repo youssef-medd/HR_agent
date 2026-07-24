@@ -148,12 +148,17 @@ export interface OnboardingKit {
   documents: string[];
 }
 
+export interface OutreachDraft {
+  tone: string;
+  subject: string;
+  message: string;
+}
+
 export interface SourcingKit {
-  boolean_search: string;
+  search_strings: string[];
   keywords: string[];
   platforms: string[];
-  outreach_subject: string;
-  outreach_message: string;
+  outreach: OutreachDraft[];
 }
 
 export interface FunnelStage {
@@ -173,6 +178,7 @@ export interface JobFunnel {
 export interface ReportOverview {
   total_applications: number;
   by_state: Record<string, number>;
+  by_source: Record<string, number>;
   funnel: FunnelStage[];
   avg_score: number | null;
   shortlist_rate: number;

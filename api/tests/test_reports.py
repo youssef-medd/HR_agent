@@ -58,6 +58,7 @@ def test_overview_funnel_and_scores(client, auth_header):
 
     assert body["total_applications"] == 3
     assert body["by_state"]["SHORTLISTED"] == 1
+    assert body["by_source"]["upload"] == 3  # seeded apps have no source tag
 
     funnel = {f["stage"]: f for f in body["funnel"]}
     assert funnel["RECEIVED"]["reached"] == 3

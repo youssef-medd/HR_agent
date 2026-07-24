@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { Copy, Loader2, Radar } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Copy, Loader2, Radar, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,9 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import type { SourcingKit } from "@/lib/api/client";
 
 function CopyButton({ text, label }: { text: string; label: string }) {
@@ -32,9 +36,13 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 }
 
 export function SourceDialog({ jobId, jobTitle }: { jobId: number; jobTitle: string }) {
+  const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [kit, setKit] = React.useState<SourcingKit | null>(null);
+  const [importText, setImportText] = React.useState("");
+  const [importName, setImportName] = React.useState("");
+  const [importing, setImporting] = React.useState(false);
 
   async function generate() {
     setLoading(true);
@@ -47,6 +55,30 @@ export function SourceDialog({ jobId, jobTitle }: { jobId: number; jobTitle: str
       return;
     }
     setKit((await res.json()) as SourcingKit);
+  }
+
+  async function importProfile() {
+    if (!importText.trim()) {
+      toast.error("Paste a profile first");
+      return;
+    }
+    setImporting(true);
+    const res = await fetch(`/api/jobs/${jobId}/import-profile`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ raw_text: importText, full_name: importName || null }),
+    });
+    setImporting(false);
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.detail ?? err?.error ?? `Import failed (${res.status})`);
+      return;
+    }
+    const body = await res.json();
+    setImportText("");
+    setImportName("");
+    router.refresh();
+    toast.success(`Imported as application #${body.application_id} — scoring now`);
   }
 
   function onOpenChange(next: boolean) {
@@ -65,8 +97,8 @@ export function SourceDialog({ jobId, jobTitle }: { jobId: number; jobTitle: str
         <DialogHeader>
           <DialogTitle>Sourcing kit</DialogTitle>
           <DialogDescription>
-            Boolean search and outreach draft for <span className="font-medium">{jobTitle}</span>.
-            Review and send manually.
+            Search strings + outreach for <span className="font-medium">{jobTitle}</span>. Run the
+            searches yourself, then paste a profile below to bring it into the pipeline.
           </DialogDescription>
         </DialogHeader>
 
@@ -79,13 +111,16 @@ export function SourceDialog({ jobId, jobTitle }: { jobId: number; jobTitle: str
         {kit && !loading && (
           <div className="space-y-5 py-2">
             <section>
-              <div className="mb-1 flex items-center justify-between">
-                <p className="eyebrow">Boolean search</p>
-                <CopyButton text={kit.boolean_search} label="Boolean search" />
-              </div>
-              <pre className="bg-muted overflow-x-auto rounded-lg p-3 text-xs whitespace-pre-wrap">
-                {kit.boolean_search}
-              </pre>
+              <p className="eyebrow mb-2">Search strings (ranked)</p>
+              <ol className="space-y-1.5">
+                {kit.search_strings.map((s, i) => (
+                  <li key={i} className="bg-muted flex items-start gap-2 rounded-lg p-2 text-xs">
+                    <span className="text-muted-foreground shrink-0">{i + 1}.</span>
+                    <code className="min-w-0 flex-1 break-words">{s}</code>
+                    <CopyButton text={s} label="Search" />
+                  </li>
+                ))}
+              </ol>
             </section>
 
             {kit.keywords.length > 0 && (
@@ -109,17 +144,19 @@ export function SourceDialog({ jobId, jobTitle }: { jobId: number; jobTitle: str
             )}
 
             <section>
-              <div className="mb-1 flex items-center justify-between">
-                <p className="eyebrow">Outreach draft</p>
-                <CopyButton
-                  text={`${kit.outreach_subject}\n\n${kit.outreach_message}`}
-                  label="Outreach"
-                />
+              <p className="eyebrow mb-2">Outreach drafts</p>
+              <div className="grid gap-2">
+                {kit.outreach.map((o, i) => (
+                  <div key={i} className="rounded-xl border p-3">
+                    <div className="mb-1 flex items-center justify-between">
+                      <span className="chip bg-muted capitalize">{o.tone}</span>
+                      <CopyButton text={`${o.subject}\n\n${o.message}`} label="Outreach" />
+                    </div>
+                    <p className="text-sm font-medium">{o.subject}</p>
+                    <p className="text-muted-foreground mt-1 text-sm whitespace-pre-wrap">{o.message}</p>
+                  </div>
+                ))}
               </div>
-              <p className="text-sm font-medium">{kit.outreach_subject}</p>
-              <p className="text-muted-foreground mt-1 text-sm whitespace-pre-wrap">
-                {kit.outreach_message}
-              </p>
             </section>
 
             <Button type="button" variant="outline" onClick={generate} className="w-full">
@@ -127,6 +164,42 @@ export function SourceDialog({ jobId, jobTitle }: { jobId: number; jobTitle: str
             </Button>
           </div>
         )}
+
+        {/* Import a sourced profile — the "assist" half of A2 */}
+        <section className="mt-2 border-t pt-4">
+          <p className="eyebrow mb-2 flex items-center gap-1.5">
+            <UserPlus className="size-3.5" /> Import a sourced profile
+          </p>
+          <p className="text-muted-foreground mb-3 text-xs">
+            Paste the public profile text you found. It&apos;s parsed and scored like a CV, tagged{" "}
+            <code>linkedin_assist</code>.
+          </p>
+          <div className="grid gap-2">
+            <Label htmlFor="imp-name" className="text-xs">
+              Name (optional)
+            </Label>
+            <Input
+              id="imp-name"
+              value={importName}
+              onChange={(e) => setImportName(e.target.value)}
+              placeholder="Candidate name"
+            />
+            <Label htmlFor="imp-text" className="text-xs">
+              Profile text
+            </Label>
+            <Textarea
+              id="imp-text"
+              rows={5}
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+              placeholder="Paste the profile summary, experience, skills…"
+            />
+            <Button type="button" onClick={importProfile} disabled={importing} className="mt-1">
+              {importing ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
+              {importing ? "Importing…" : "Import & score"}
+            </Button>
+          </div>
+        </section>
       </DialogContent>
     </Dialog>
   );

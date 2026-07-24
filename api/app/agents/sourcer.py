@@ -17,12 +17,19 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.gateway import llm_call
 
-PROMPT_VERSION = "sourcing@v1"
+PROMPT_VERSION = "sourcing@v2"
+
+
+class OutreachDraft(BaseModel):
+    tone: str = Field(default="", description="e.g. warm / direct / casual")
+    subject: str = Field(default="")
+    message: str = Field(default="", description="Personalisable draft with [placeholders]")
 
 
 class SourcingKit(BaseModel):
-    boolean_search: str = Field(
-        default="", description="Ready-to-paste boolean query for LinkedIn/Google X-ray"
+    search_strings: list[str] = Field(
+        default_factory=list,
+        description="5-10 boolean/X-ray strings, ranked best-first",
     )
     keywords: list[str] = Field(
         default_factory=list, description="Core skills/titles to search on"
@@ -30,9 +37,8 @@ class SourcingKit(BaseModel):
     platforms: list[str] = Field(
         default_factory=list, description="Suggested sourcing platforms"
     )
-    outreach_subject: str = Field(default="", description="Short outreach subject line")
-    outreach_message: str = Field(
-        default="", description="Personalisable outreach draft (with [placeholders])"
+    outreach: list[OutreachDraft] = Field(
+        default_factory=list, description="Three outreach drafts in different tones"
     )
 
 
@@ -43,19 +49,20 @@ class SourcingError(RuntimeError):
 _SYSTEM_PROMPT = (
     "You are an expert technical sourcer. Given a job posting, produce a practical "
     "sourcing kit a recruiter can act on immediately. Rules:\n"
-    "- boolean_search: ONE ready-to-paste boolean string usable in LinkedIn "
-    "Recruiter or a Google X-ray (e.g. site:linkedin.com/in). Combine role titles "
-    "and must-have skills with AND/OR and parentheses.\n"
+    "- search_strings: 5 to 10 ready-to-paste boolean / Google X-ray strings "
+    "(e.g. site:linkedin.com/in ...), ranked with the highest-precision first. "
+    "Vary titles, synonyms, FR/EN variants and location filters.\n"
     "- keywords: the 6-12 most discriminating skills/titles for this role.\n"
     "- platforms: where these candidates are found (e.g. LinkedIn, GitHub, "
     "Stack Overflow, Kaggle, Behance) — pick what fits the role.\n"
-    "- outreach_subject: a concise, non-spammy subject line.\n"
-    "- outreach_message: a short, warm outreach draft (<120 words) with "
-    "[placeholders] the recruiter fills in (e.g. [first name]). Never invent "
-    "compensation or guarantees.\n"
-    "Respond with a single JSON object using EXACTLY these keys: boolean_search "
-    "(string), keywords (array of strings), platforms (array of strings), "
-    "outreach_subject (string), outreach_message (string). Nothing else."
+    "- outreach: EXACTLY three drafts with distinct tones — 'warm', 'direct', "
+    "'casual'. Each has a concise non-spammy subject and a short message "
+    "(<120 words) using [placeholders] the recruiter fills in (e.g. [first name]). "
+    "Never invent compensation or guarantees.\n"
+    "Respond with a single JSON object using EXACTLY these keys: search_strings "
+    "(array of strings), keywords (array of strings), platforms (array of "
+    "strings), outreach (array of objects with keys tone, subject, message). "
+    "Nothing else."
 )
 
 

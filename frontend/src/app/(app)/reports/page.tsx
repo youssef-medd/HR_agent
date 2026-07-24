@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 const EMPTY: ReportOverview = {
   total_applications: 0,
   by_state: {},
+  by_source: {},
   funnel: [],
   avg_score: null,
   shortlist_rate: 0,
@@ -64,6 +65,22 @@ export default async function ReportsPage() {
           </div>
         ))}
       </div>
+
+      {Object.keys(data.by_source).length > 0 && (
+        <div className="surface mb-6 p-6">
+          <h2 className="font-heading mb-3 text-base font-semibold tracking-tight">By source</h2>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(data.by_source)
+              .sort((a, b) => b[1] - a[1])
+              .map(([src, n]) => (
+                <span key={src} className="bg-muted inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm">
+                  {titleCase(src)}
+                  <b className="tabular-nums">{n}</b>
+                </span>
+              ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-6 xl:grid-cols-[1.2fr_1fr]">
         {/* Funnel */}
