@@ -78,6 +78,7 @@ export interface JobView {
   created_at: string;
   applicants: number;
   shortlisted: number;
+  spec?: JobIntake | null;
 }
 
 export interface AttentionItem {
@@ -90,6 +91,36 @@ export interface AttentionItem {
   context: Record<string, unknown>;
   status: string;
   created_at: string;
+}
+
+export interface JobSpecStruct {
+  seniority: string;
+  location: string;
+  salary_range: string;
+  missions: string[];
+  must_have: string[];
+  nice_to_have: string[];
+  languages: string[];
+  eliminatory_criteria: string[];
+}
+
+export interface JobWeights {
+  skills: number;
+  experience: number;
+  education: number;
+}
+
+export interface JobChannels {
+  linkedin_post: string;
+  job_board_text: string;
+  careers_page: string;
+  whatsapp_blurb: string;
+}
+
+export interface JobIntake {
+  spec: JobSpecStruct;
+  weights: JobWeights;
+  channels: JobChannels;
 }
 
 export interface TimelineEntry {

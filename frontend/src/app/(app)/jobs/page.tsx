@@ -1,5 +1,6 @@
 import { CreateJobDialog } from "@/components/jobs/create-job-dialog";
 import { SourceDialog } from "@/components/jobs/source-dialog";
+import { StructureDialog } from "@/components/jobs/structure-dialog";
 import { PageHeader } from "@/components/shell/page-header";
 import { type JobView } from "@/lib/api/client";
 import { apiGet } from "@/lib/api/server";
@@ -53,8 +54,13 @@ export default async function JobsPage() {
                 <h2 className="font-heading mb-1 text-lg font-semibold tracking-tight">
                   {job.title}
                 </h2>
-                <p className="text-muted-foreground text-sm">
+                <p className="text-muted-foreground flex items-center gap-2 text-sm">
                   {job.location ?? "—"}
+                  {job.spec && (
+                    <span className="chip bg-emerald-50 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400">
+                      structured
+                    </span>
+                  )}
                 </p>
                 {job.description && (
                   <p className="text-muted-foreground mt-3 line-clamp-3 text-xs leading-relaxed">
@@ -81,7 +87,10 @@ export default async function JobsPage() {
                     <p className="eyebrow">Shortlisted</p>
                   </div>
                 </div>
-                <SourceDialog jobId={job.id} jobTitle={job.title} />
+                <div className="flex flex-col items-stretch gap-2">
+                  <StructureDialog jobId={job.id} jobTitle={job.title} />
+                  <SourceDialog jobId={job.id} jobTitle={job.title} />
+                </div>
               </div>
             </article>
           ))}

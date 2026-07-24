@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.agents.job_intake import JobIntake, structure_job
 from app.agents.sourcer import SourcingKit, generate_sourcing_kit
 from app.db import get_db
 from app.models.application import Application
@@ -42,6 +43,7 @@ class JobView(BaseModel):
     created_at: str
     applicants: int = 0
     shortlisted: int = 0
+    spec: dict | None = None
 
 
 def _to_view(job: Job, applicants: int = 0, shortlisted: int = 0) -> JobView:
@@ -55,6 +57,7 @@ def _to_view(job: Job, applicants: int = 0, shortlisted: int = 0) -> JobView:
         created_at=job.created_at.isoformat(),
         applicants=applicants,
         shortlisted=shortlisted,
+        spec=job.spec,
     )
 
 
@@ -130,3 +133,20 @@ def job_sourcing(
         location=job.location,
         user_id=str(user.id),
     )
+
+
+@router.post("/{job_id}/structure", response_model=JobIntake)
+def job_structure(
+    job_id: int,
+    user: Annotated[User, Depends(require_role("admin", "recruiter"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> JobIntake:
+    """A1 — structure a raw JD into a JobSpec + weights + channel content, stored on the job."""
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    result = structure_job(title=job.title, raw_jd=job.description, user_id=str(user.id))
+    job.spec = result.model_dump()
+    db.commit()
+    return result
