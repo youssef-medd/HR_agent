@@ -46,7 +46,12 @@ def test_apply_creates_application_and_enqueues(client, monkeypatch):
 
     resp = client.post(
         "/public/apply",
-        data={"job_id": str(job_id), "email": "cand@x.io", "full_name": "Jane Doe"},
+        data={
+            "job_id": str(job_id),
+            "email": "cand@x.io",
+            "full_name": "Jane Doe",
+            "phone": "+216 93 008 267",
+        },
         files={"file": ("cv.txt", b"Python, SQL, 5 years", "text/plain")},
     )
     assert resp.status_code == 201
@@ -63,6 +68,7 @@ def test_apply_creates_application_and_enqueues(client, monkeypatch):
         assert row.candidate_ref == "cand@x.io"
         assert row.payload["source"] == "web"
         assert row.payload["applicant_name"] == "Jane Doe"
+        assert row.payload["phone"] == "+216 93 008 267"
         assert row.payload["jd_text"] == "Backend role"
         assert row.payload["cv_filename"] == "cv.txt"
     finally:

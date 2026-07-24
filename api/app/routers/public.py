@@ -94,6 +94,7 @@ async def apply(
     email: Annotated[str, Form()],
     file: Annotated[UploadFile, File()],
     full_name: Annotated[str | None, Form()] = None,
+    phone: Annotated[str | None, Form()] = None,
 ) -> PublicApplicationCreated:
     job = db.get(Job, job_id)
     if job is None or job.status != "published":
@@ -126,6 +127,7 @@ async def apply(
             "cv_b64": base64.b64encode(data).decode("ascii"),
             "source": "web",
             "applicant_name": full_name or "",
+            **({"phone": phone.strip()} if phone and phone.strip() else {}),
             **({"jd_text": job.description} if job.description else {}),
         },
     )

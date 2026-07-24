@@ -91,6 +91,19 @@ export function ApplyForm({ jobId, jobTitle }: { jobId: number; jobTitle: string
         />
       </div>
       <div className="grid gap-2">
+        <Label htmlFor="phone">WhatsApp number (optional)</Label>
+        <Input
+          id="phone"
+          name="phone"
+          type="tel"
+          placeholder="+216 12 345 678"
+          autoComplete="tel"
+        />
+        <p className="text-muted-foreground text-xs">
+          If shortlisted, our assistant may pre-screen you on WhatsApp.
+        </p>
+      </div>
+      <div className="grid gap-2">
         <Label htmlFor="file">CV</Label>
         <Input id="file" name="file" type="file" accept={ACCEPT} required />
         <p className="text-muted-foreground text-xs">PDF, DOCX, TXT or MD · max 10 MB</p>

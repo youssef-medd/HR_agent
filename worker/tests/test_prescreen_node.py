@@ -23,6 +23,20 @@ from orchestrator.side_effects import _sent_log_reset, _sent_log_snapshot
 QUESTIONS = ["Years of experience?", "Notice period?"]
 
 
+def test_whatsapp_recipient_prefers_phone():
+    from types import SimpleNamespace
+
+    from orchestrator.nodes import _whatsapp_recipient
+
+    row = SimpleNamespace(candidate_ref="cand@x.io")
+    # applicant-provided phone wins over the email candidate_ref
+    assert _whatsapp_recipient(row, {"phone": "21693008267"}) == "21693008267"
+    # then the parsed CV phone
+    assert _whatsapp_recipient(row, {"cv": {"phone": "+216111"}}) == "+216111"
+    # falls back to candidate_ref when no phone anywhere
+    assert _whatsapp_recipient(row, {}) == "cand@x.io"
+
+
 def _seed(db_factory, **payload_over) -> int:
     payload = {"cv_text": "Cand — Python", "screening_questions": QUESTIONS}
     payload.update(payload_over)

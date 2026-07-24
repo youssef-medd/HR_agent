@@ -83,7 +83,11 @@ def _find_application(db: Session, from_phone: str) -> Application | None:
         .order_by(Application.id.desc())
     ).all()
     for row in rows:
-        candidates = [row.candidate_ref, (row.payload.get("cv") or {}).get("phone")]
+        candidates = [
+            row.payload.get("phone"),
+            (row.payload.get("cv") or {}).get("phone"),
+            row.candidate_ref,
+        ]
         for cand in candidates:
             d = _digits(cand)
             if d and (d == want or d.endswith(want) or want.endswith(d)):

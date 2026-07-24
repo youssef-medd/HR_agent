@@ -261,6 +261,19 @@ def _save_interview(db: Session, application_id: int, block: dict[str, Any]) -> 
         db.commit()
 
 
+def _whatsapp_recipient(app_row: Application | None, payload: dict[str, Any]) -> str:
+    """Resolve the WhatsApp number for a candidate.
+
+    Prefers the phone captured on the application (apply form), then the phone
+    parsed from the CV, and only falls back to `candidate_ref` (which may be an
+    email — the send will then fail loudly rather than silently mis-target).
+    """
+    if app_row is None:
+        return "unknown"
+    phone = (payload.get("phone") or (payload.get("cv") or {}).get("phone") or "").strip()
+    return phone or app_row.candidate_ref
+
+
 def prescreen_node(db: Session, state: NodeState) -> NodeState:
     """A5 — WhatsApp conversational pre-screening.
 
@@ -281,7 +294,7 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
     attempt = state.get("attempt", 1)
     app_row = db.get(Application, app_id)
     payload = dict(app_row.payload) if app_row is not None else {}
-    recipient = app_row.candidate_ref if app_row is not None else "unknown"
+    recipient = _whatsapp_recipient(app_row, payload)
 
     # Keep the in-memory stage in lockstep with the DB so the final transition is
     # computed from the real current state on the completing replay.
@@ -377,7 +390,7 @@ def schedule_node(db: Session, state: NodeState) -> NodeState:
     attempt = state.get("attempt", 1)
     app_row = db.get(Application, app_id)
     payload = dict(app_row.payload) if app_row is not None else {}
-    recipient = app_row.candidate_ref if app_row is not None else "unknown"
+    recipient = _whatsapp_recipient(app_row, payload)
 
     if app_row is not None:
         state["stage"] = app_row.state
