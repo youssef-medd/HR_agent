@@ -7,6 +7,21 @@ missing CV source routes the application to NEEDS_ATTENTION).
 
 from __future__ import annotations
 
+from orchestrator.agents.parser import CVData
+
+
+def test_cvdata_coerces_int_year_and_dates():
+    # The LLM often returns year/dates as ints; the parser must coerce, not fail.
+    cv = CVData.model_validate(
+        {
+            "full_name": "Amine",
+            "education": [{"degree": "MSc", "institution": "INSAT", "year": 2019}],
+            "experiences": [{"title": "Dev", "company": "Acme", "start": 2020, "end": 2024}],
+        }
+    )
+    assert cv.education[0].year == "2019"
+    assert cv.experiences[0].start == "2020" and cv.experiences[0].end == "2024"
+
 import pytest
 
 from app.models.application import Application

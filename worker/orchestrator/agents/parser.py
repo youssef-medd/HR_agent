@@ -26,6 +26,19 @@ from app.gateway import llm_call
 PROMPT_VERSION = "cv_parse@v1"
 
 
+def _coerce_str(v: object) -> object:
+    """Cast scalars the model may emit as int/float (e.g. a year 2019) to str.
+
+    Date and year fields are declared as strings, but the LLM frequently returns
+    a bare integer for them; coerce rather than fail validation.
+    """
+    if v is None:
+        return ""
+    if isinstance(v, (int, float)):
+        return str(v)
+    return v
+
+
 class Experience(BaseModel):
     title: str = Field(default="", description="Job title / role")
     company: str = Field(default="", description="Employer name")
@@ -33,11 +46,21 @@ class Experience(BaseModel):
     end: str = Field(default="", description="End date, or 'present'")
     summary: str = Field(default="", description="One-line description of the role")
 
+    @field_validator("start", "end", mode="before")
+    @classmethod
+    def _coerce_dates(cls, v: object) -> object:
+        return _coerce_str(v)
+
 
 class Education(BaseModel):
     degree: str = Field(default="", description="Degree or qualification")
     institution: str = Field(default="", description="School / university name")
     year: str = Field(default="", description="Graduation year as written")
+
+    @field_validator("year", mode="before")
+    @classmethod
+    def _coerce_year(cls, v: object) -> object:
+        return _coerce_str(v)
 
 
 class CVData(BaseModel):
