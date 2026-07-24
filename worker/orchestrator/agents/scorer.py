@@ -75,12 +75,30 @@ _SHORTLIST_AT = 70
 _POOL_AT = 45
 
 
-def _finalize(raw: ScoreResult) -> ScoreResult:
-    """Recompute overall + recommendation from sub-scores with fixed weights."""
+def _weight_fractions(weights: dict[str, Any] | None) -> dict[str, float]:
+    """Per-job weights (A1's JobSpec) as fractions summing to 1, else the default.
+
+    Accepts integer importances like {"skills": 55, "experience": 35,
+    "education": 10}; falls back to the fixed defaults when absent or degenerate.
+    """
+    if not weights:
+        return _WEIGHTS
+    s = float(weights.get("skills", 0) or 0)
+    e = float(weights.get("experience", 0) or 0)
+    d = float(weights.get("education", 0) or 0)
+    total = s + e + d
+    if total <= 0:
+        return _WEIGHTS
+    return {"skills_match": s / total, "experience_match": e / total, "education_match": d / total}
+
+
+def _finalize(raw: ScoreResult, weights: dict[str, Any] | None = None) -> ScoreResult:
+    """Recompute overall + recommendation from sub-scores with per-job weights."""
+    w = _weight_fractions(weights)
     overall = round(
-        raw.skills_match * _WEIGHTS["skills_match"]
-        + raw.experience_match * _WEIGHTS["experience_match"]
-        + raw.education_match * _WEIGHTS["education_match"]
+        raw.skills_match * w["skills_match"]
+        + raw.experience_match * w["experience_match"]
+        + raw.education_match * w["education_match"]
     )
     recommendation: Recommendation = (
         "shortlist" if overall >= _SHORTLIST_AT else "pool" if overall >= _POOL_AT else "decline"
@@ -88,10 +106,59 @@ def _finalize(raw: ScoreResult) -> ScoreResult:
     return raw.model_copy(update={"overall": overall, "recommendation": recommendation})
 
 
+class HardFilterCheck(BaseModel):
+    unmet: list[str] = Field(default_factory=list)
+
+
+_HARD_FILTER_SYSTEM = (
+    "You are a strict eligibility checker for a job. You receive a candidate's "
+    "identity-masked profile and a list of HARD requirements. Return a single "
+    "JSON object {\"unmet\": [...]} listing ONLY the requirements the profile does "
+    "not clearly satisfy. Include a requirement as unmet only when there is no "
+    "evidence in the profile that it is met. Nothing else."
+)
+
+
+def check_hard_filters(
+    masked_cv: dict[str, Any],
+    criteria: list[str],
+    *,
+    user_id: str | None = None,
+) -> list[str]:
+    """Return the eliminatory criteria the candidate does NOT meet (empty = pass).
+
+    No LLM call when there are no criteria. On schema drift, fails open (returns
+    []) rather than blocking a candidate on a checker error.
+    """
+    if not criteria:
+        return []
+    user_content = (
+        f"HARD REQUIREMENTS:\n{json.dumps(criteria, ensure_ascii=False)}\n\n"
+        f"CANDIDATE PROFILE (identity-masked):\n{json.dumps(masked_cv, ensure_ascii=False)}"
+    )
+    try:
+        result: HardFilterCheck = llm_call(
+            profile="extractor",
+            messages=[
+                {"role": "system", "content": _HARD_FILTER_SYSTEM},
+                {"role": "user", "content": user_content},
+            ],
+            schema=HardFilterCheck,
+            user_id=user_id,
+            metadata={"agent": "A4", "prompt_version": PROMPT_VERSION, "stage": "hard_filter"},
+        )
+    except ValidationError:
+        return []
+    # Only echo back criteria that were actually asked about.
+    wanted = {c.strip().lower() for c in criteria}
+    return [u for u in result.unmet if u.strip().lower() in wanted] or result.unmet
+
+
 def score_candidate(
     masked_cv: dict[str, Any],
     jd_text: str | None,
     *,
+    weights: dict[str, Any] | None = None,
     user_id: str | None = None,
 ) -> ScoreResult:
     """Score a masked candidate against a job description via the judge model."""
@@ -116,4 +183,4 @@ def score_candidate(
         )
     except ValidationError as exc:
         raise ScoreError(f"Judge output did not match ScoreResult schema: {exc}") from exc
-    return _finalize(result)
+    return _finalize(result, weights)

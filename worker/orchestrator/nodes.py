@@ -38,7 +38,7 @@ from orchestrator.agents.scheduler import (
     booking_prompt,
     interpret_booking_reply,
 )
-from orchestrator.agents.scorer import ScoreError, score_candidate
+from orchestrator.agents.scorer import ScoreError, check_hard_filters, score_candidate
 from orchestrator.gates import (
     execute_after_offer_gate,
     execute_after_rejection_gate,
@@ -141,17 +141,36 @@ def parse_node(db: Session, state: NodeState) -> NodeState:
 
 
 def score_node(db: Session, state: NodeState) -> NodeState:
-    """A4 — score the masked CV against the job description. NEEDS_ATTENTION on failure."""
-    app_row = db.get(Application, state["application_id"])
+    """A4 — score the masked CV against the job description. NEEDS_ATTENTION on failure.
+
+    Consumes A1's structured JobSpec when present: the eliminatory criteria act
+    as hard filters (any unmet -> forced decline, routed to the human rejection
+    gate) and the per-job weights drive the weighted overall.
+    """
+    app_id = state["application_id"]
+    app_row = db.get(Application, app_id)
     payload = dict(app_row.payload) if app_row is not None else {}
+
+    job = db.get(Job, app_row.job_id) if app_row is not None else None
+    job_spec = (job.spec or {}) if job is not None else {}
+    eliminatory = (job_spec.get("spec") or {}).get("eliminatory_criteria") or []
+    weights = job_spec.get("weights")
 
     def _work() -> dict[str, Any]:
         cv = CVData.model_validate(payload.get("cv") or {})
         masked = mask_cv(cv)
+        unmet = check_hard_filters(masked, eliminatory, user_id=str(app_id))
         result = score_candidate(
-            masked, payload.get("jd_text"), user_id=str(state["application_id"])
+            masked, payload.get("jd_text"), weights=weights, user_id=str(app_id)
         )
-        return result.model_dump()
+        data = result.model_dump()
+        data["weights_used"] = weights or "default"
+        if unmet:
+            # Hard-filter failure overrides the judge: decline (human-gated),
+            # never auto-sent. Recorded for the recruiter to see the reason.
+            data["recommendation"] = "decline"
+            data["hard_filter_failures"] = unmet
+        return data
 
     try:
         score = with_ledger(db, state["application_id"], "score", state.get("attempt", 1), _work)

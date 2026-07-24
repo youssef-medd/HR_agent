@@ -162,6 +162,70 @@ def test_score_node_stores_score_and_advances(db_factory, monkeypatch):
         assert row.payload["score"]["overall"] == 77
 
 
+def test_score_candidate_honours_per_job_weights(monkeypatch):
+    def fake(*, profile, messages, schema, **_):
+        return ScoreResult(overall=0, skills_match=90, experience_match=40, education_match=40)
+
+    monkeypatch.setattr(scorer_mod, "llm_call", fake)
+
+    # skills-only weighting -> overall == skills_match
+    skills_only = score_candidate({}, "jd", weights={"skills": 100, "experience": 0, "education": 0})
+    assert skills_only.overall == 90 and skills_only.recommendation == "shortlist"
+
+    # education-only weighting -> overall == education_match
+    edu_only = score_candidate({}, "jd", weights={"skills": 0, "experience": 0, "education": 100})
+    assert edu_only.overall == 40 and edu_only.recommendation == "decline"
+
+
+def test_check_hard_filters(monkeypatch):
+    from orchestrator.agents.scorer import HardFilterCheck, check_hard_filters
+
+    # no criteria -> no LLM call, empty result
+    monkeypatch.setattr(scorer_mod, "llm_call", lambda **_: (_ for _ in ()).throw(AssertionError()))
+    assert check_hard_filters({}, []) == []
+
+    # criteria present -> returns the unmet subset
+    monkeypatch.setattr(
+        scorer_mod, "llm_call", lambda **_: HardFilterCheck(unmet=["Work permit"])
+    )
+    assert check_hard_filters({"skills": ["Python"]}, ["Work permit", "Python"]) == ["Work permit"]
+
+
+def test_score_node_hard_filter_forces_decline(db_factory, monkeypatch):
+    from orchestrator import nodes
+    from app.models.job import Job
+
+    with db_factory() as db:
+        db.add(
+            Job(
+                id=1,
+                title="Backend",
+                status="published",
+                spec={
+                    "spec": {"eliminatory_criteria": ["Valid work permit"]},
+                    "weights": {"skills": 60, "experience": 30, "education": 10},
+                },
+            )
+        )
+        db.commit()
+
+    monkeypatch.setattr(nodes, "check_hard_filters", lambda masked, crit, **_: ["Valid work permit"])
+    monkeypatch.setattr(
+        nodes, "score_candidate",
+        lambda masked, jd, **_: ScoreResult(overall=88, recommendation="shortlist"),
+    )
+    app_id = _seed(db_factory, {"cv": {"skills": ["Python"]}, "jd_text": "Backend"})
+
+    with db_factory() as db:
+        nodes.score_node(db, {"application_id": app_id, "stage": "PARSED", "attempt": 1})
+
+    with db_factory() as db:
+        score = db.get(Application, app_id).payload["score"]
+        assert score["recommendation"] == "decline"  # hard filter overrides the judge
+        assert score["hard_filter_failures"] == ["Valid work permit"]
+        assert score["weights_used"] == {"skills": 60, "experience": 30, "education": 10}
+
+
 def test_score_node_routes_to_needs_attention_on_error(db_factory, monkeypatch):
     from orchestrator import nodes
 
