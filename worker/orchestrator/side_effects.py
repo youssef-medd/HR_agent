@@ -16,7 +16,7 @@ import os
 import re
 from typing import Any
 
-from orchestrator.emails import render_email, send_email
+from orchestrator.emails import portal_link, render_email, send_email
 
 # In-memory sent log — the audit surface for exactly-once delivery. Kept even
 # once real transports are wired: every send appends here for observability and
@@ -148,6 +148,28 @@ def _send_confirmation_impl(application_id: int, recipient: str) -> dict[str, An
 
 def _publish_job_impl(job_id: int, board: str) -> dict[str, Any]:
     entry = {"kind": "publish", "job_id": job_id, "board": board}
+    _SENT.append(entry)
+    return entry
+
+
+def _send_prescreen_invite_impl(application_id: int, recipient: str, link: str) -> dict[str, Any]:
+    """A7 — email a shortlisted web candidate a direct pre-screening chat link.
+
+    Non-sensitive. Only meaningful for email recipients (web channel); the link
+    opens the candidate portal prefilled so nothing must be memorised."""
+    body = (
+        "Hello,\n\nGood news — you've been shortlisted! The next step is a short "
+        "pre-screening chat with our AI assistant (a human makes the final "
+        f"decision).\n\nStart it here:\n{link}\n\nBest,\nRecruiting Team"
+    )
+    email_id = send_email(recipient, "You're shortlisted — quick pre-screening", body)
+    entry = {
+        "kind": "prescreen_invite",
+        "application_id": application_id,
+        "recipient": recipient,
+        "link": link,
+        "email_id": email_id,
+    }
     _SENT.append(entry)
     return entry
 

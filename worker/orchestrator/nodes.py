@@ -28,6 +28,7 @@ from orchestrator.agents.parser import CVData, CVParseError, extract_text, parse
 from orchestrator.agents.prescreen import (
     CONSENT_PROMPT,
     PrescreenError,
+    generate_questions,
     interpret_answer,
     interpret_consent,
     screening_questions,
@@ -45,9 +46,11 @@ from orchestrator.gates import (
     require_gate,
 )
 from orchestrator.idempotency import with_ledger
+from orchestrator.emails import portal_link
 from orchestrator.side_effects import (
     _send_booking_link_impl,
     _send_confirmation_impl,
+    _send_prescreen_invite_impl,
     _send_whatsapp_impl,
 )
 from orchestrator.state_machine import State, transition
@@ -266,19 +269,20 @@ def _candidate_message(resume: Any) -> str:
     return str(resume)
 
 
-def _save_payload_key(db: Session, application_id: int, key: str, block: dict[str, Any]) -> None:
+def _save_payload_key(db: Session, application_id: int, key: str, value: Any) -> None:
     """Persist one payload key from an INDEPENDENT session.
 
     Payload writes committed on the node's own session do not survive when the
     node later raises `interrupt()` (LangGraph replays the node and the pause
     discards the in-flight session's work). A fresh session bound to the same
     engine commits in its own transaction, so mid-conversation state (chat
-    transcript, answers, booking link) is durable while the graph is paused.
+    transcript, answers, booking link, generated questions) is durable while the
+    graph is paused.
     """
     with Session(bind=db.get_bind()) as s:
         row = s.get(Application, application_id)
         if row is not None:
-            row.payload = {**row.payload, key: block}
+            row.payload = {**row.payload, key: value}
             s.commit()
 
 
@@ -348,9 +352,29 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
     if State(state["stage"]) == State.SHORTLISTED:
         _advance(db, state, State.PRESCREENING, "prescreen_start")
 
+    # Generate job-specific questions from A1's JobSpec on first entry, persist
+    # them so replays reuse the exact same set (deterministic interrupt sequence).
+    if not payload.get("screening_questions") and app_row is not None:
+        job = db.get(Job, app_row.job_id)
+        if job is not None and job.spec:
+            generated = generate_questions(title=job.title, job_spec=job.spec, user_id=str(app_id))
+            if generated:
+                payload["screening_questions"] = generated
+                _save_payload_key(db, app_id, "screening_questions", generated)
+
     block: dict[str, Any] = dict(payload.get("prescreen") or {})
     prior_answers: list[dict[str, Any]] = list(block.get("answers") or [])
     questions = screening_questions(payload)
+
+    # Web candidates can't be pinged over WhatsApp, so A7 emails them a direct
+    # portal chat link (ledger-guarded exactly-once). Best-effort: a stub/failed
+    # send must not block the conversation.
+    if channel == "web" and app_row is not None and "@" in (app_row.candidate_ref or ""):
+        invite_ref = app_row.candidate_ref
+        with_ledger(
+            db, app_id, "prescreen_invite", attempt,
+            lambda: _send_prescreen_invite_impl(app_id, invite_ref, portal_link(invite_ref, app_id)),
+        )
 
     # Transcript is rebuilt deterministically from the resume values on every
     # replay, so it can be regenerated fresh each turn. It is the web-chat

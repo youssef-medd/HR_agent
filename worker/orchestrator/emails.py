@@ -18,6 +18,13 @@ import os
 import smtplib
 from email.message import EmailMessage
 from email.utils import make_msgid
+from urllib.parse import quote
+
+
+def portal_link(email: str, application_id: int) -> str:
+    """Deep link into the candidate portal, prefilled — no reference to memorise."""
+    base = (os.environ.get("PORTAL_URL") or "http://localhost:3001").rstrip("/")
+    return f"{base}/portal?email={quote(email)}&ref={application_id}"
 
 # Versioned templates keyed by "<kind>@<version>", with a bare-kind fallback.
 # Deterministic copy (no LLM) — rejection/offer wording must be consistent and

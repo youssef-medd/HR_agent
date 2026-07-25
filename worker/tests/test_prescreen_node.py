@@ -162,3 +162,7 @@ def test_prescreen_web_channel_uses_transcript_not_whatsapp(db_factory, monkeypa
 
     # Web channel never touches WhatsApp.
     assert [s for s in _sent_log_snapshot() if s["kind"] == "whatsapp"] == []
+    # An invite email with a prefilled portal link is sent exactly once.
+    invites = [s for s in _sent_log_snapshot() if s["kind"] == "prescreen_invite"]
+    assert len(invites) == 1
+    assert "/portal?email=" in invites[0]["link"] and f"ref={app_id}" in invites[0]["link"]

@@ -25,14 +25,13 @@ export default function PortalPage() {
   const [error, setError] = React.useState<string | null>(null);
   const [result, setResult] = React.useState<TrackedApplication | null>(null);
 
-  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (loading) return;
+  const lookup = React.useCallback(async (e: string, r: string) => {
+    if (!e.trim() || !r.trim()) return;
     setError(null);
     setResult(null);
     setLoading(true);
     const res = await fetch(
-      `/api/public/track?email=${encodeURIComponent(email.trim())}&application_id=${encodeURIComponent(ref.trim())}`,
+      `/api/public/track?email=${encodeURIComponent(e.trim())}&application_id=${encodeURIComponent(r.trim())}`,
       { cache: "no-store" },
     );
     setLoading(false);
@@ -41,6 +40,25 @@ export default function PortalPage() {
       return;
     }
     setResult((await res.json()) as TrackedApplication);
+  }, []);
+
+  // Deep link from the invite email (/portal?email=…&ref=…) auto-loads — the
+  // candidate never has to remember their reference number.
+  React.useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const e = p.get("email") ?? "";
+    const r = p.get("ref") ?? "";
+    if (e && r) {
+      setEmail(e);
+      setRef(r);
+      lookup(e, r);
+    }
+  }, [lookup]);
+
+  function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (loading) return;
+    lookup(email, ref);
   }
 
   return (

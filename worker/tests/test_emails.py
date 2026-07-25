@@ -15,6 +15,16 @@ from orchestrator.side_effects import (
 )
 
 
+def test_portal_link(monkeypatch):
+    from orchestrator.emails import portal_link
+
+    monkeypatch.setenv("PORTAL_URL", "https://careers.welyne.com/")
+    assert portal_link("a@b.io", 42) == "https://careers.welyne.com/portal?email=a%40b.io&ref=42"
+
+    monkeypatch.delenv("PORTAL_URL", raising=False)
+    assert portal_link("a@b.io", 7).endswith("/portal?email=a%40b.io&ref=7")
+
+
 def test_render_email_versioned_and_fallback():
     subj_r, body_r = render_email("rejection@v1")
     assert subj_r == "Update on your application"

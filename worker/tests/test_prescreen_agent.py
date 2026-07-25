@@ -57,6 +57,34 @@ def test_interpret_answer_returns_structured(monkeypatch):
     assert result.answer == "5 years" and result.answered is True
 
 
+def test_generate_questions_from_spec(monkeypatch):
+    from orchestrator.agents.prescreen import DEFAULT_QUESTIONS, QuestionSet, generate_questions
+
+    # No structured spec -> default set, no LLM call.
+    monkeypatch.setattr(
+        prescreen_mod, "llm_call", lambda **_: (_ for _ in ()).throw(AssertionError())
+    )
+    assert generate_questions(title="X", job_spec=None) == DEFAULT_QUESTIONS
+
+    # With a spec -> LLM-generated, job-specific questions.
+    monkeypatch.setattr(
+        prescreen_mod, "llm_call",
+        lambda **_: QuestionSet(questions=["Describe a RAG pipeline you built.", "Notice period?"]),
+    )
+    qs = generate_questions(title="AI Engineer", job_spec={"spec": {"must_have": ["RAG"]}})
+    assert qs == ["Describe a RAG pipeline you built.", "Notice period?"]
+
+
+def test_generate_questions_falls_back_on_error(monkeypatch):
+    from orchestrator.agents.prescreen import DEFAULT_QUESTIONS, generate_questions
+
+    def boom(**_):
+        raise RuntimeError("llm down")
+
+    monkeypatch.setattr(prescreen_mod, "llm_call", boom)
+    assert generate_questions(title="X", job_spec={"spec": {"must_have": ["Y"]}}) == DEFAULT_QUESTIONS
+
+
 def test_interpret_consent_wraps_validation_error(monkeypatch):
     def boom(**_):
         return ConsentInterpretation.model_validate({"consent": "not-a-bool-and-uncoercible"})
