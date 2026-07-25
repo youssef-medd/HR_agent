@@ -24,6 +24,7 @@ from app.models.application import Application
 from app.models.application_event import ApplicationEvent
 from app.models.job import Job
 from app.queue import enqueue_application_step
+from app.rgpd import erase_candidate
 
 router = APIRouter(prefix="/public", tags=["public"])
 
@@ -311,3 +312,31 @@ def booking_confirm(
         body.application_id, {"candidate_message": f"I booked the interview for {when}."}
     )
     return booking_view(email=body.email, application_id=body.application_id, db=db)
+
+
+# --- RGPD erasure (spec §7 — candidate right to be forgotten) ----------------
+
+
+class EraseIn(BaseModel):
+    email: str
+    application_id: int
+
+
+class EraseView(BaseModel):
+    erased: bool
+    applications_erased: int
+
+
+@router.post("/candidates/erase", response_model=EraseView)
+def erase_candidate_data(
+    body: EraseIn,
+    db: Annotated[Session, Depends(get_db)],
+) -> EraseView:
+    """Anonymise all of a candidate's data after verifying ownership.
+
+    The candidate proves ownership with one application's email+reference; every
+    application under that reference is then anonymised (audit trail retained,
+    personal data scrubbed)."""
+    row = _verify_candidate(db, body.application_id, body.email)
+    count = erase_candidate(db, row.candidate_ref, reason="candidate_request")
+    return EraseView(erased=True, applications_erased=count)

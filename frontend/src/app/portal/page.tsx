@@ -25,6 +25,7 @@ export default function PortalPage() {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [result, setResult] = React.useState<TrackedApplication | null>(null);
+  const [erased, setErased] = React.useState(false);
 
   const lookup = React.useCallback(async (e: string, r: string) => {
     if (!e.trim() || !r.trim()) return;
@@ -60,6 +61,20 @@ export default function PortalPage() {
     e.preventDefault();
     if (loading) return;
     lookup(email, ref);
+  }
+
+  async function eraseData() {
+    if (!result) return;
+    if (!window.confirm("Permanently erase all your personal data? This cannot be undone.")) return;
+    const res = await fetch("/api/public/candidates/erase", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: email.trim(), application_id: result.id }),
+    });
+    if (res.ok) {
+      setErased(true);
+      setResult(null);
+    }
   }
 
   return (
@@ -155,6 +170,24 @@ export default function PortalPage() {
         <div className="mt-6">
           <BookingPanel email={email.trim()} appId={result.id} />
         </div>
+      )}
+
+      {result && (
+        <div className="mt-6 text-center">
+          <button
+            type="button"
+            onClick={eraseData}
+            className="text-muted-foreground hover:text-red-600 text-xs underline underline-offset-4"
+          >
+            Erase my personal data (RGPD)
+          </button>
+        </div>
+      )}
+
+      {erased && (
+        <p className="mt-6 text-center text-sm text-emerald-600 dark:text-emerald-400">
+          Your personal data has been erased.
+        </p>
       )}
     </main>
   );

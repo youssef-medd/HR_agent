@@ -44,4 +44,9 @@ celery.conf.beat_schedule = {
         "task": "orchestrator.send_interview_reminders",
         "schedule": float(os.environ.get("REMINDER_POLL_SECONDS", "3600")),
     },
+    # RGPD §7 — anonymise applications past the retention limit. Daily.
+    "purge-expired-applications": {
+        "task": "orchestrator.purge_expired_applications",
+        "schedule": float(os.environ.get("RETENTION_POLL_SECONDS", "86400")),
+    },
 }

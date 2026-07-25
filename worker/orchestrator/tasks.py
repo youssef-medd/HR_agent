@@ -29,6 +29,7 @@ from orchestrator.email_intake import (
     fetch_new_cv_attachments,
     imap_configured,
 )
+from app.rgpd import purge_expired
 from orchestrator.graph import build_graph
 from orchestrator.side_effects import _send_interview_reminder_impl
 
@@ -210,3 +211,14 @@ def send_interview_reminders() -> dict[str, Any]:
     if reminded:
         logger.info("Interview reminders sent for %s", reminded)
     return {"reminded": reminded}
+
+
+@celery.task(name="orchestrator.purge_expired_applications")
+def purge_expired_applications() -> dict[str, Any]:
+    """RGPD §7 — beat job: anonymise applications past the retention limit."""
+    months = int(os.environ.get("RETENTION_MONTHS", "12"))
+    with _db_factory() as db:
+        purged = purge_expired(db, months=months)
+    if purged:
+        logger.info("Retention: anonymised %d expired application(s): %s", len(purged), purged)
+    return {"purged": purged}
