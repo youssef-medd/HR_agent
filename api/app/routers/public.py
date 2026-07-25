@@ -257,3 +257,57 @@ def prescreen_reply(
         )
     enqueue_application_step(body.application_id, {"candidate_message": body.message})
     return prescreen_view(email=body.email, application_id=body.application_id, db=db)
+
+
+# --- A6 web interview booking (candidate portal channel) --------------------
+
+
+class BookingView(BaseModel):
+    state: str
+    link: str
+    awaiting: bool  # PRESCREENED and waiting on the candidate to book
+    booked: bool
+    when: str | None = None
+
+
+class BookingConfirmIn(BaseModel):
+    email: str
+    application_id: int
+    slot: str | None = None
+
+
+@router.get("/booking", response_model=BookingView)
+def booking_view(
+    email: str,
+    application_id: int,
+    db: Annotated[Session, Depends(get_db)],
+) -> BookingView:
+    """A6 web booking: the Cal.com link + whether the candidate still needs to book."""
+    row = _verify_candidate(db, application_id, email)
+    interview = (row.payload.get("interview") or {}) if isinstance(row.payload, dict) else {}
+    return BookingView(
+        state=row.state,
+        link=interview.get("link") or "",
+        awaiting=row.state == "PRESCREENED",
+        booked=bool(interview.get("booked")) or row.state == "INTERVIEW_SCHEDULED",
+        when=interview.get("when"),
+    )
+
+
+@router.post("/booking/confirm", response_model=BookingView)
+def booking_confirm(
+    body: BookingConfirmIn,
+    db: Annotated[Session, Depends(get_db)],
+) -> BookingView:
+    """Candidate confirms a booked slot from the portal — resumes the paused A6 graph."""
+    row = _verify_candidate(db, body.application_id, body.email)
+    if row.state != "PRESCREENED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This application is not awaiting an interview booking",
+        )
+    when = body.slot or "the proposed time"
+    enqueue_application_step(
+        body.application_id, {"candidate_message": f"I booked the interview for {when}."}
+    )
+    return booking_view(email=body.email, application_id=body.application_id, db=db)

@@ -216,3 +216,67 @@ def test_prescreen_reply_wrong_state_409(client):
         json={"email": "c@x.io", "application_id": app_id, "message": "hi"},
     )
     assert resp.status_code == 409
+
+
+def _seed_prescreened(client) -> int:
+    from app.db import get_db
+    from app.models.application import Application
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        row = Application(
+            job_id=1,
+            candidate_ref="cand@x.io",
+            state="PRESCREENED",
+            payload={"interview": {"link": "https://cal.com/book/1", "channel": "web"}},
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row.id
+    finally:
+        db.close()
+
+
+def test_booking_view_awaiting(client):
+    app_id = _seed_prescreened(client)
+    resp = client.get("/public/booking", params={"email": "cand@x.io", "application_id": app_id})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["awaiting"] is True and body["booked"] is False
+    assert body["link"].endswith("/book/1")
+
+
+def test_booking_confirm_enqueues(client, monkeypatch):
+    from app.routers import public as public_router
+
+    enqueued: list = []
+    monkeypatch.setattr(public_router, "enqueue_application_step", lambda *a, **k: enqueued.append(a))
+
+    app_id = _seed_prescreened(client)
+    resp = client.post(
+        "/public/booking/confirm",
+        json={"email": "cand@x.io", "application_id": app_id, "slot": "Tue 3pm"},
+    )
+    assert resp.status_code == 200
+    assert enqueued[0][0] == app_id
+    assert "Tue 3pm" in enqueued[0][1]["candidate_message"]
+
+
+def test_booking_confirm_wrong_state_409(client):
+    from app.db import get_db
+    from app.models.application import Application
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        row = Application(job_id=1, candidate_ref="c@x.io", state="SCORED", payload={})
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        app_id = row.id
+    finally:
+        db.close()
+    resp = client.post(
+        "/public/booking/confirm", json={"email": "c@x.io", "application_id": app_id}
+    )
+    assert resp.status_code == 409

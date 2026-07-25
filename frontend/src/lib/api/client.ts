@@ -142,6 +142,14 @@ export interface PrescreenView {
   done: boolean;
 }
 
+export interface BookingView {
+  state: string;
+  link: string;
+  awaiting: boolean;
+  booked: boolean;
+  when: string | null;
+}
+
 export interface TrackedApplication {
   id: number;
   state: string;
