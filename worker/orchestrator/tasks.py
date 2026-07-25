@@ -10,16 +10,17 @@ recruiter action). Retries are backed off; on final failure a
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.models.application import Application
+from app.models.job import Job
+from app.models.needs_attention import NeedsAttention
 from celery.utils.log import get_task_logger
 from langgraph.types import Command
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-from app.models.application import Application
-from app.models.job import Job
-from app.models.needs_attention import NeedsAttention
 from orchestrator.celery_app import celery
 from orchestrator.checkpointer import postgres_saver
 from orchestrator.config import settings
@@ -29,6 +30,7 @@ from orchestrator.email_intake import (
     imap_configured,
 )
 from orchestrator.graph import build_graph
+from orchestrator.side_effects import _send_interview_reminder_impl
 
 logger = get_task_logger(__name__)
 
@@ -163,3 +165,48 @@ def poll_email_inbox() -> dict[str, Any]:
 
     logger.info("Email intake: polled %d attachment(s), created %s", len(incomings), created)
     return {"polled": len(incomings), "created": created}
+
+
+def _send_due_reminders(db, *, now: datetime | None = None) -> list[int]:
+    """Send interview reminders for INTERVIEW_SCHEDULED apps due within 24h.
+
+    Idempotent: an application whose `interview.reminder_sent` flag is set is
+    skipped, and the flag is set on send. Testable — inject `now`.
+    """
+    now = now or datetime.now(UTC)
+    horizon = now + timedelta(hours=24)
+    rows = db.scalars(
+        select(Application).where(Application.state == "INTERVIEW_SCHEDULED")
+    ).all()
+    reminded: list[int] = []
+    for row in rows:
+        interview = (row.payload or {}).get("interview") or {}
+        scheduled_raw = interview.get("scheduled_at")
+        if not scheduled_raw or interview.get("reminder_sent"):
+            continue
+        try:
+            scheduled = datetime.fromisoformat(scheduled_raw)
+        except ValueError:
+            continue
+        if scheduled.tzinfo is None:
+            scheduled = scheduled.replace(tzinfo=UTC)
+        if not (now <= scheduled <= horizon):
+            continue
+        recipient = row.candidate_ref
+        when = interview.get("when") or scheduled.strftime("%a %d %b, %H:%M UTC")
+        _send_interview_reminder_impl(db, row.id, recipient, when)
+        interview = {**interview, "reminder_sent": True}
+        row.payload = {**(row.payload or {}), "interview": interview}
+        db.commit()
+        reminded.append(row.id)
+    return reminded
+
+
+@celery.task(name="orchestrator.send_interview_reminders")
+def send_interview_reminders() -> dict[str, Any]:
+    """A6 — beat job: remind candidates 24h before their interview."""
+    with _db_factory() as db:
+        reminded = _send_due_reminders(db)
+    if reminded:
+        logger.info("Interview reminders sent for %s", reminded)
+    return {"reminded": reminded}

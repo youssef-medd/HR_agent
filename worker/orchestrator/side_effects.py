@@ -263,3 +263,52 @@ def _send_booking_link_impl(
     }
     _SENT.append(entry)
     return entry
+
+
+def _send_interview_confirmation_impl(
+    db: Session, application_id: int, recipient: str, when: str, ics: str | None = None
+) -> dict[str, Any]:
+    """A6 — confirm the booked interview. Email carries an ICS invite; a phone
+    candidate gets a plain WhatsApp confirmation. Non-sensitive, ledger-guarded."""
+    body = (
+        f"Your interview is confirmed for {when}. A calendar invite is attached. "
+        "We look forward to speaking with you."
+    )
+    if _looks_like_email(recipient):
+        channel = "email"
+        message_id = send_email(recipient, "Your interview is confirmed", body, ics=ics)
+    else:
+        channel = "whatsapp"
+        message_id = _wa_deliver(recipient, body)
+    log_message(
+        db, application_id=application_id, recipient=recipient, channel=channel,
+        template_id="interview_confirmation", rendered_body=body,
+        status="sent" if message_id else "stub", provider_message_id=message_id,
+    )
+    entry = {
+        "kind": "interview_confirmation", "application_id": application_id,
+        "recipient": recipient, "when": when, "channel": channel,
+        "message_id": message_id, "has_ics": ics is not None,
+    }
+    _SENT.append(entry)
+    return entry
+
+
+def _send_interview_reminder_impl(
+    db: Session, application_id: int, recipient: str, when: str
+) -> dict[str, Any]:
+    """A6 — 24h interview reminder. Non-sensitive; sent by the reminder beat job."""
+    body = f"Reminder: your interview is scheduled for {when}. See you soon!"
+    channel, message_id = _deliver_notification(recipient, "Interview reminder", body)
+    log_message(
+        db, application_id=application_id, recipient=recipient, channel=channel,
+        template_id="interview_reminder", rendered_body=body,
+        status="sent" if message_id else "stub", provider_message_id=message_id,
+    )
+    entry = {
+        "kind": "interview_reminder", "application_id": application_id,
+        "recipient": recipient, "when": when, "channel": channel,
+        "message_id": message_id,
+    }
+    _SENT.append(entry)
+    return entry

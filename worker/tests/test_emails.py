@@ -98,6 +98,40 @@ def test_send_email_configured_delivers(monkeypatch):
     assert captured["from"] == "noreply@welyne.local"
 
 
+def test_send_email_attaches_ics(monkeypatch):
+    monkeypatch.setenv("SMTP_USER", "bot@welyne.local")
+    monkeypatch.setenv("SMTP_PASS", "app-pass")
+
+    sent: dict = {}
+
+    class FakeSMTP:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def starttls(self):
+            pass
+
+        def login(self, *a):
+            pass
+
+        def send_message(self, msg):
+            sent["msg"] = msg
+
+    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+
+    ics = "BEGIN:VCALENDAR\r\nEND:VCALENDAR"
+    send_email("cand@x.io", "Confirmed", "Body", ics=ics)
+
+    parts = [p.get_content_type() for p in sent["msg"].walk()]
+    assert "text/calendar" in parts
+
+
 def test_send_email_failure_raises(monkeypatch):
     monkeypatch.setenv("SMTP_USER", "u")
     monkeypatch.setenv("SMTP_PASS", "p")

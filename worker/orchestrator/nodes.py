@@ -37,7 +37,10 @@ from orchestrator.agents.scheduler import (
     SchedulerError,
     booking_link,
     booking_prompt,
+    build_ics,
+    candidate_timezone,
     interpret_booking_reply,
+    propose_slots,
 )
 from orchestrator.agents.scorer import ScoreError, check_hard_filters, score_candidate
 from orchestrator.emails import portal_link
@@ -50,6 +53,7 @@ from orchestrator.idempotency import with_ledger
 from orchestrator.side_effects import (
     _send_booking_link_impl,
     _send_confirmation_impl,
+    _send_interview_confirmation_impl,
     _send_prescreen_invite_impl,
     _send_whatsapp_impl,
 )
@@ -483,13 +487,17 @@ def schedule_node(db: Session, state: NodeState) -> NodeState:
         state["stage"] = app_row.state
 
     link = booking_link(app_id)
-    message = booking_prompt(link)
-    # Persist the booking link so a web candidate can open it from the portal;
-    # only send over WhatsApp when a real phone is on file (an email recipient
-    # would 400 the Meta API).
+    tz = candidate_timezone(payload)
+    slots = propose_slots(tz)
+    message = booking_prompt(link, slots, tz)
+    # Persist the booking link + proposed slots so a web candidate can open the
+    # portal and pick a time; only send over WhatsApp when a real phone is on
+    # file (an email recipient would 400 the Meta API).
     booking_block = dict(payload.get("interview") or {})
     booking_block["link"] = link
     booking_block["channel"] = channel
+    booking_block["timezone"] = tz
+    booking_block["proposed_slots"] = [s.isoformat() for s in slots]
     _save_interview(db, app_id, booking_block)
     if channel == "whatsapp":
         with_ledger(
@@ -500,7 +508,10 @@ def schedule_node(db: Session, state: NodeState) -> NodeState:
         interrupt({"kind": "await_booking", "application_id": app_id, "link": link})
     )
 
-    interview = dict(payload.get("interview") or {})
+    # Reload: the Cal.com webhook may have stamped a concrete scheduled_at while
+    # the graph was paused.
+    fresh = db.get(Application, app_id)
+    interview = dict((fresh.payload or {}).get("interview") or {}) if fresh else dict(booking_block)
     try:
         conf = interpret_booking_reply(reply, user_id=str(app_id))
     except SchedulerError as exc:
@@ -518,8 +529,31 @@ def schedule_node(db: Session, state: NodeState) -> NodeState:
         return _advance(db, state, State.NEEDS_ATTENTION, "schedule_not_booked")
 
     booked_at = interview.get("at") or datetime.now(UTC).isoformat()
-    interview.update(booked=True, when=conf.when, link=link, at=booked_at)
+    # Concrete slot for reminders: the Cal.com startTime if present, else the
+    # first proposed slot as a best-effort anchor.
+    scheduled_at = interview.get("scheduled_at") or (slots[0].isoformat() if slots else None)
+    interview.update(
+        booked=True, when=conf.when, link=link, at=booked_at, scheduled_at=scheduled_at
+    )
     _save_interview(db, app_id, interview)
+
+    # Send a confirmation with an ICS invite (email) or a text (WhatsApp).
+    ics = None
+    if scheduled_at:
+        try:
+            start = datetime.fromisoformat(scheduled_at)
+            ics = build_ics(
+                start_utc=start, summary="Interview", uid=f"welyne-interview-{app_id}",
+                description=f"Interview for application {app_id}.",
+            )
+        except ValueError:
+            ics = None
+    conf_recipient = recipient or (fresh.candidate_ref if fresh is not None else "")
+    when_text = conf.when or scheduled_at or "the scheduled time"
+    with_ledger(
+        db, app_id, "send_interview_confirmation", attempt,
+        lambda: _send_interview_confirmation_impl(db, app_id, conf_recipient, when_text, ics),
+    )
     return _advance(db, state, State.INTERVIEW_SCHEDULED, "schedule")
 
 

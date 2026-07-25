@@ -78,6 +78,14 @@ async def receive(
         return {"status": "ignored"}
 
     when = payload.get("startTime") or "the scheduled time"
+    # Persist the concrete start time so the schedule node + reminder job have a
+    # real datetime anchor (the resume message is only free text).
+    start_time = payload.get("startTime")
+    if start_time:
+        interview = dict((row.payload or {}).get("interview") or {})
+        interview["scheduled_at"] = start_time
+        row.payload = {**(row.payload or {}), "interview": interview}
+        db.commit()
     enqueue_application_step(
         app_id, {"candidate_message": f"I booked the interview for {when} via Cal.com."}
     )

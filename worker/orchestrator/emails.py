@@ -105,10 +105,18 @@ def render_email(kind: str, *, name: str | None = None, lang: str | None = None)
     return subject, body.format(name=greeting)
 
 
-def send_email(to: str, subject: str, body: str) -> str | None:
+def send_email(
+    to: str,
+    subject: str,
+    body: str,
+    *,
+    ics: str | None = None,
+    ics_filename: str = "interview.ics",
+) -> str | None:
     """Send one email over SMTP. Returns a Message-ID, or None in stub mode.
 
-    Raises `EmailSendError` on any SMTP/connection failure.
+    When `ics` is given, a text/calendar invite is attached (A6 interview
+    confirmation). Raises `EmailSendError` on any SMTP/connection failure.
     """
     if not _smtp_configured():
         return None
@@ -126,6 +134,13 @@ def send_email(to: str, subject: str, body: str) -> str | None:
     msg["To"] = to
     msg["Subject"] = subject
     msg.set_content(body)
+    if ics is not None:
+        msg.add_attachment(
+            ics.encode("utf-8"),
+            maintype="text",
+            subtype="calendar",
+            filename=ics_filename,
+        )
 
     try:
         with smtplib.SMTP(host, port, timeout=15) as server:

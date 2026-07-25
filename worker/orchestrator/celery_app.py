@@ -37,5 +37,11 @@ celery.conf.beat_schedule = {
     "poll-email-inbox": {
         "task": "orchestrator.poll_email_inbox",
         "schedule": float(os.environ.get("IMAP_POLL_SECONDS", "120")),
-    }
+    },
+    # A6 — scan for interviews due within 24h and send reminders. Idempotent
+    # per application (reminder_sent flag), so a frequent schedule is safe.
+    "send-interview-reminders": {
+        "task": "orchestrator.send_interview_reminders",
+        "schedule": float(os.environ.get("REMINDER_POLL_SECONDS", "3600")),
+    },
 }
