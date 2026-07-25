@@ -12,18 +12,22 @@ Read-only; available to any authenticated role.
 
 from __future__ import annotations
 
+import csv
+import io
 from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.application import Application
 from app.models.application_event import ApplicationEvent
 from app.models.job import Job
+from app.models.message_log import MessageLog
 from app.models.needs_attention import NeedsAttention
 from app.models.user import User
 from app.security import require_role
@@ -180,4 +184,77 @@ def overview(
         hire_rate=hire_rate,
         open_gates=open_gates,
         per_job=per_job,
+    )
+
+
+class MessagingSummary(BaseModel):
+    total: int
+    by_channel: dict[str, int]
+    by_status: dict[str, int]
+    by_template: dict[str, int]
+    rate_limited: int
+
+
+@router.get("/messaging", response_model=MessagingSummary)
+def messaging_summary(
+    user: Annotated[User, Depends(require_role("admin", "recruiter", "viewer"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> MessagingSummary:
+    """A7/A9 — outbound message stats from the message_log audit table.
+
+    Note: token/cost-per-hire is intentionally not computed here — the platform
+    does not persist per-generation token counts locally (they live in Langfuse,
+    spec §3). Wire it to the Langfuse API when cost reporting is required rather
+    than approximating it from message counts.
+    """
+    def _counts(column) -> dict[str, int]:
+        rows = db.execute(select(column, func.count()).group_by(column)).all()
+        return {str(k): int(v) for k, v in rows}
+
+    total = db.execute(select(func.count()).select_from(MessageLog)).scalar_one()
+    by_status = _counts(MessageLog.status)
+    return MessagingSummary(
+        total=int(total),
+        by_channel=_counts(MessageLog.channel),
+        by_status=by_status,
+        by_template=_counts(MessageLog.template_id),
+        rate_limited=by_status.get("skipped_rate_limited", 0),
+    )
+
+
+_CSV_COLUMNS = [
+    "id", "job_id", "job_title", "candidate_ref", "state", "source",
+    "score_overall", "recommendation", "created_at",
+]
+
+
+@router.get("/applications.csv")
+def applications_csv(
+    user: Annotated[User, Depends(require_role("admin", "recruiter"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    """A9 — export all applications as CSV (admin/recruiter only)."""
+    jobs = {j.id: j.title for j in db.scalars(select(Job)).all()}
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(_CSV_COLUMNS)
+    for a in db.scalars(select(Application).order_by(Application.id)).all():
+        payload = a.payload if isinstance(a.payload, dict) else {}
+        raw_score = payload.get("score")
+        score = raw_score if isinstance(raw_score, dict) else {}
+        writer.writerow([
+            a.id,
+            a.job_id,
+            jobs.get(a.job_id, f"Job #{a.job_id}"),
+            a.candidate_ref,
+            a.state,
+            payload.get("source") or "upload",
+            score.get("overall", ""),
+            score.get("recommendation", ""),
+            a.created_at.isoformat() if a.created_at else "",
+        ])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=applications.csv"},
     )

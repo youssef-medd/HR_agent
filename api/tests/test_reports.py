@@ -89,3 +89,47 @@ def test_overview_empty(client, auth_header):
     assert body["avg_score"] is None
     assert body["shortlist_rate"] == 0.0
     assert {f["stage"] for f in body["funnel"]} >= {"RECEIVED", "HIRED"}
+
+
+def test_applications_csv_export(client, auth_header):
+    _seed(client)
+    resp = client.get("/reports/applications.csv", headers=auth_header)
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert "attachment; filename=applications.csv" in resp.headers["content-disposition"]
+
+    lines = resp.text.strip().splitlines()
+    assert lines[0].startswith("id,job_id,job_title,candidate_ref,state,source")
+    assert len(lines) == 4  # header + 3 apps
+    assert any("a@x.io" in row and ",80," in row for row in lines[1:])
+
+
+def test_applications_csv_requires_auth(client):
+    assert client.get("/reports/applications.csv").status_code == 401
+
+
+def test_messaging_summary(client, auth_header):
+    from app.db import get_db
+    from app.models.message_log import MessageLog
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        db.add_all([
+            MessageLog(recipient="a@x.io", channel="email", template_id="offer",
+                       rendered_body="x", status="sent"),
+            MessageLog(recipient="a@x.io", channel="email", template_id="offer",
+                       rendered_body="x", status="skipped_rate_limited"),
+            MessageLog(recipient="+216", channel="whatsapp", template_id="prescreen_question",
+                       rendered_body="x", status="stub"),
+        ])
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.get("/reports/messaging", headers=auth_header)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 3
+    assert body["by_channel"] == {"email": 2, "whatsapp": 1}
+    assert body["rate_limited"] == 1
+    assert body["by_template"]["offer"] == 2
