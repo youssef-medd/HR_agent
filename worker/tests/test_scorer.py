@@ -8,8 +8,8 @@ score_node branches.
 from __future__ import annotations
 
 import pytest
-
 from app.models.application import Application
+
 from orchestrator.agents import scorer as scorer_mod
 from orchestrator.agents.masking import mask_cv
 from orchestrator.agents.parser import CVData
@@ -177,6 +177,41 @@ def test_score_candidate_honours_per_job_weights(monkeypatch):
     assert edu_only.overall == 40 and edu_only.recommendation == "decline"
 
 
+def test_evidence_verification_drops_hallucinated_quotes(monkeypatch):
+    from orchestrator.agents.scorer import Evidence
+
+    def fake(*, profile, messages, schema, **_):
+        return ScoreResult(
+            overall=0, skills_match=80, experience_match=60, education_match=50,
+            sector_context_fit=70,
+            evidence=[
+                Evidence(dimension="skills_match", quote="Python"),        # real
+                Evidence(dimension="skills_match", quote="Rust wizardry"), # hallucinated
+                Evidence(dimension="bogus_dim", quote="Python"),          # unknown dim
+                Evidence(dimension="experience_match", quote=""),         # empty
+            ],
+        )
+
+    monkeypatch.setattr(scorer_mod, "llm_call", fake)
+    result = score_candidate({"skills": ["Python", "SQL"], "summary": "Built APIs"}, "jd")
+
+    quotes = [(e.dimension, e.quote) for e in result.evidence]
+    assert quotes == [("skills_match", "Python")]  # only the verifiable, known-dim quote
+    assert result.sector_context_fit == 70  # 4th subscore passes through
+    # overall still derives from the 3 core dimensions: .5*80+.35*60+.15*50 = 68.5 -> 68
+    assert result.overall == 68
+
+
+def test_verify_evidence_normalizes_whitespace_and_case():
+    from orchestrator.agents.scorer import Evidence, _verify_evidence
+
+    masked = {"experiences": [{"summary": "Shipped   scalable  APIs"}]}
+    kept = _verify_evidence(
+        [Evidence(dimension="experience_match", quote="shipped scalable apis")], masked
+    )
+    assert len(kept) == 1
+
+
 def test_check_hard_filters(monkeypatch):
     from orchestrator.agents.scorer import HardFilterCheck, check_hard_filters
 
@@ -192,8 +227,9 @@ def test_check_hard_filters(monkeypatch):
 
 
 def test_score_node_hard_filter_forces_decline(db_factory, monkeypatch):
-    from orchestrator import nodes
     from app.models.job import Job
+
+    from orchestrator import nodes
 
     with db_factory() as db:
         db.add(

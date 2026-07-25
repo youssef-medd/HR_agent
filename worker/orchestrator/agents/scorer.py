@@ -16,13 +16,31 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
+from app.gateway import llm_call
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
-from app.gateway import llm_call
-
-PROMPT_VERSION = "cv_score@v2"
+PROMPT_VERSION = "cv_score@v3"
 
 Recommendation = Literal["shortlist", "pool", "decline"]
+
+_EVIDENCE_DIMENSIONS = {
+    "skills_match", "experience_match", "education_match", "sector_context_fit",
+}
+
+
+class Evidence(BaseModel):
+    """One citation backing a subscore — a verbatim quote from the masked profile."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    dimension: str = Field(
+        default="", description="Which subscore this supports",
+        validation_alias=AliasChoices("dimension", "subscore", "field"),
+    )
+    quote: str = Field(
+        default="", description="Verbatim span from the candidate profile",
+        validation_alias=AliasChoices("quote", "evidence", "text"),
+    )
 
 
 class ScoreResult(BaseModel):
@@ -37,10 +55,17 @@ class ScoreResult(BaseModel):
     skills_match: int = Field(default=0, ge=0, le=100)
     experience_match: int = Field(default=0, ge=0, le=100)
     education_match: int = Field(default=0, ge=0, le=100)
+    # 4th subscore (spec §6 A4): fit with the job's sector/domain context.
+    # Informational — the deterministic `overall` still derives from the three
+    # core dimensions so per-job weights stay meaningful.
+    sector_context_fit: int = Field(default=0, ge=0, le=100)
     rationale: str = Field(
         default="", description="Short justification, identity-blind",
         validation_alias=AliasChoices("rationale", "summary", "justification"),
     )
+    # Quotes from the masked profile that justify the subscores. Unverifiable
+    # quotes (not found in the profile) are dropped before the result is stored.
+    evidence: list[Evidence] = Field(default_factory=list)
     recommendation: Recommendation = Field(default="pool")
 
 
@@ -60,11 +85,19 @@ _SYSTEM_PROMPT = (
     "- 50-69: partial overlap; several requirements unmet\n"
     "- 25-49: weak overlap; only tangential evidence\n"
     "- 0-24: no relevant evidence\n"
+    "Also score sector_context_fit (0-100): how well the candidate's domain and "
+    "industry background match THIS job's sector, using the same anchored bands.\n"
     "In the rationale, name the specific requirements that are met and missing.\n"
+    "Provide an `evidence` array: each item is {\"dimension\": one of "
+    "skills_match|experience_match|education_match|sector_context_fit, \"quote\": a "
+    "SHORT VERBATIM span copied exactly from the candidate profile that supports "
+    "your score for that dimension}. Copy quotes character-for-character from the "
+    "profile; never paraphrase or invent them.\n"
     "Respond with a single JSON object using EXACTLY these keys: "
     "overall (int 0-100), skills_match (int 0-100), experience_match (int 0-100), "
-    "education_match (int 0-100), rationale (string), recommendation "
-    "('shortlist'|'pool'|'decline'). Nothing else."
+    "education_match (int 0-100), sector_context_fit (int 0-100), rationale "
+    "(string), evidence (array), recommendation ('shortlist'|'pool'|'decline'). "
+    "Nothing else."
 )
 
 # Deterministic weighting — the persisted `overall` and `recommendation` are
@@ -90,6 +123,35 @@ def _weight_fractions(weights: dict[str, Any] | None) -> dict[str, float]:
     if total <= 0:
         return _WEIGHTS
     return {"skills_match": s / total, "experience_match": e / total, "education_match": d / total}
+
+
+def _normalize(text: str) -> str:
+    """Lowercase + collapse whitespace, so quote matching ignores formatting."""
+    return " ".join(text.lower().split())
+
+
+def _profile_haystack(masked_cv: dict[str, Any]) -> str:
+    """All text in the masked profile as one normalized searchable string."""
+    return _normalize(json.dumps(masked_cv, ensure_ascii=False))
+
+
+def _verify_evidence(evidence: list[Evidence], masked_cv: dict[str, Any]) -> list[Evidence]:
+    """Drop citations whose quote is not a verbatim span of the masked profile.
+
+    The judge only ever sees the masked profile, so every legitimate quote must
+    appear there. Anything that does not is a hallucinated citation and is
+    removed before the score is persisted. Empty quotes and unknown dimensions
+    are also dropped.
+    """
+    haystack = _profile_haystack(masked_cv)
+    verified: list[Evidence] = []
+    for item in evidence:
+        quote = _normalize(item.quote)
+        if not quote or item.dimension not in _EVIDENCE_DIMENSIONS:
+            continue
+        if quote in haystack:
+            verified.append(item)
+    return verified
 
 
 def _finalize(raw: ScoreResult, weights: dict[str, Any] | None = None) -> ScoreResult:
@@ -183,4 +245,5 @@ def score_candidate(
         )
     except ValidationError as exc:
         raise ScoreError(f"Judge output did not match ScoreResult schema: {exc}") from exc
+    result = result.model_copy(update={"evidence": _verify_evidence(result.evidence, masked_cv)})
     return _finalize(result, weights)
