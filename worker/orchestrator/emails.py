@@ -26,10 +26,10 @@ def portal_link(email: str, application_id: int) -> str:
     base = (os.environ.get("PORTAL_URL") or "http://localhost:3001").rstrip("/")
     return f"{base}/portal?email={quote(email)}&ref={application_id}"
 
-# Versioned templates keyed by "<kind>@<version>", with a bare-kind fallback.
 # Deterministic copy (no LLM) — rejection/offer wording must be consistent and
-# reviewable. `{name}` is filled from context when available.
-_TEMPLATES: dict[str, tuple[str, str]] = {
+# reviewable. `{name}` is filled from context when available. Templates are
+# bilingual (EN/FR); the caller passes the candidate's language.
+_TEMPLATES_EN: dict[str, tuple[str, str]] = {
     "confirmation": (
         "We received your application",
         "Hello{name},\n\nThanks for applying — we've received your application "
@@ -52,6 +52,41 @@ _TEMPLATES: dict[str, tuple[str, str]] = {
     ),
 }
 
+_TEMPLATES_FR: dict[str, tuple[str, str]] = {
+    "confirmation": (
+        "Nous avons bien reçu votre candidature",
+        "Bonjour{name},\n\nMerci pour votre candidature — nous l'avons bien "
+        "reçue et notre équipe l'examine. Nous reviendrons vers vous "
+        "prochainement.\n\nCordialement,\nL'équipe de recrutement",
+    ),
+    "rejection": (
+        "Suite donnée à votre candidature",
+        "Bonjour{name},\n\nNous vous remercions de votre intérêt et du temps "
+        "consacré à votre candidature. Après un examen attentif, nous ne "
+        "donnerons pas suite pour le moment. Nous apprécions sincèrement vos "
+        "efforts et vous encourageons à postuler à de futurs postes "
+        "correspondant à votre profil.\n\nCordialement,\nL'équipe de recrutement",
+    ),
+    "offer": (
+        "Votre offre",
+        "Bonjour{name},\n\nNous avons le plaisir de vous proposer le poste. "
+        "Notre équipe reviendra vers vous très prochainement avec les détails "
+        "et les prochaines étapes. Félicitations !\n\nCordialement,\n"
+        "L'équipe de recrutement",
+    ),
+}
+
+_TEMPLATES_BY_LANG: dict[str, dict[str, tuple[str, str]]] = {
+    "en": _TEMPLATES_EN,
+    "fr": _TEMPLATES_FR,
+}
+
+
+def normalize_lang(lang: str | None) -> str:
+    """Collapse a locale to a supported template language ('en' or 'fr')."""
+    code = (lang or "").strip().lower()[:2]
+    return code if code in _TEMPLATES_BY_LANG else "en"
+
 
 class EmailSendError(RuntimeError):
     """Raised when the SMTP server rejects a message."""
@@ -61,10 +96,11 @@ def _smtp_configured() -> bool:
     return bool(os.environ.get("SMTP_USER") and os.environ.get("SMTP_PASS"))
 
 
-def render_email(kind: str, *, name: str | None = None) -> tuple[str, str]:
-    """Render (subject, body) for a template kind or "kind@version" id."""
+def render_email(kind: str, *, name: str | None = None, lang: str | None = None) -> tuple[str, str]:
+    """Render (subject, body) for a template kind in the candidate's language."""
     base = kind.split("@", 1)[0]
-    subject, body = _TEMPLATES.get(kind) or _TEMPLATES.get(base) or _TEMPLATES["confirmation"]
+    table = _TEMPLATES_BY_LANG[normalize_lang(lang)]
+    subject, body = table.get(base) or table["confirmation"]
     greeting = f" {name}" if name else ""
     return subject, body.format(name=greeting)
 

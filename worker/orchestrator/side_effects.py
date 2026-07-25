@@ -16,7 +16,10 @@ import os
 import re
 from typing import Any
 
-from orchestrator.emails import portal_link, render_email, send_email
+from sqlalchemy.orm import Session
+
+from orchestrator.emails import render_email, send_email
+from orchestrator.message_log import candidate_language, is_rate_limited, log_message
 
 # In-memory sent log — the audit surface for exactly-once delivery. Kept even
 # once real transports are wired: every send appends here for observability and
@@ -102,48 +105,68 @@ def _deliver_notification(recipient: str, subject: str, body: str) -> tuple[str,
     return "whatsapp", _wa_deliver(recipient, body)
 
 
-def _send_rejection_impl(application_id: int, recipient: str, template: str) -> dict[str, Any]:
-    subject, body = render_email(template or "rejection")
+def _send_notification(
+    db: Session, application_id: int, recipient: str, kind: str, subject: str, body: str
+) -> dict[str, Any]:
+    """Deliver a notification-class message with A7 rate-limit + audit logging.
+
+    Rejection/offer/prescreen_invite are throttled to one per recipient per
+    window (see `message_log.is_rate_limited`); a suppressed send is recorded as
+    `skipped_rate_limited` and never delivered. Every send appends to `_SENT`
+    (exactly-once audit) and writes a `message_log` row on the caller's session.
+    """
+    if is_rate_limited(db, recipient, template_id=kind):
+        log_message(
+            db, application_id=application_id, recipient=recipient,
+            channel="email" if _looks_like_email(recipient) else "whatsapp",
+            template_id=kind, rendered_body=body, status="skipped_rate_limited",
+        )
+        entry = {
+            "kind": kind, "application_id": application_id, "recipient": recipient,
+            "channel": "email" if _looks_like_email(recipient) else "whatsapp",
+            "message_id": None, "status": "skipped_rate_limited",
+        }
+        _SENT.append(entry)
+        return entry
+
     channel, message_id = _deliver_notification(recipient, subject, body)
+    log_message(
+        db, application_id=application_id, recipient=recipient, channel=channel,
+        template_id=kind, rendered_body=body,
+        status="sent" if message_id else "stub", provider_message_id=message_id,
+    )
     entry = {
-        "kind": "rejection",
-        "application_id": application_id,
-        "recipient": recipient,
-        "template": template,
-        "channel": channel,
-        "message_id": message_id,
+        "kind": kind, "application_id": application_id, "recipient": recipient,
+        "channel": channel, "message_id": message_id, "status": "sent",
     }
     _SENT.append(entry)
     return entry
 
 
-def _send_offer_impl(application_id: int, recipient: str, template: str) -> dict[str, Any]:
-    subject, body = render_email(template or "offer")
-    channel, message_id = _deliver_notification(recipient, subject, body)
-    entry = {
-        "kind": "offer",
-        "application_id": application_id,
-        "recipient": recipient,
-        "template": template,
-        "channel": channel,
-        "message_id": message_id,
-    }
-    _SENT.append(entry)
-    return entry
+def _send_rejection_impl(
+    db: Session, application_id: int, recipient: str, template: str, lang: str | None = None
+) -> dict[str, Any]:
+    subject, body = render_email(
+        template or "rejection", lang=lang or candidate_language(db, application_id)
+    )
+    return _send_notification(db, application_id, recipient, "rejection", subject, body)
 
 
-def _send_confirmation_impl(application_id: int, recipient: str) -> dict[str, Any]:
-    subject, body = render_email("confirmation")
-    channel, message_id = _deliver_notification(recipient, subject, body)
-    entry = {
-        "kind": "confirmation",
-        "application_id": application_id,
-        "recipient": recipient,
-        "channel": channel,
-        "message_id": message_id,
-    }
-    _SENT.append(entry)
-    return entry
+def _send_offer_impl(
+    db: Session, application_id: int, recipient: str, template: str, lang: str | None = None
+) -> dict[str, Any]:
+    subject, body = render_email(
+        template or "offer", lang=lang or candidate_language(db, application_id)
+    )
+    return _send_notification(db, application_id, recipient, "offer", subject, body)
+
+
+def _send_confirmation_impl(
+    db: Session, application_id: int, recipient: str, lang: str | None = None
+) -> dict[str, Any]:
+    # Confirmations are exempt from the rate-limiter (not in the throttled set).
+    subject, body = render_email("confirmation", lang=lang or candidate_language(db, application_id))
+    return _send_notification(db, application_id, recipient, "confirmation", subject, body)
 
 
 def _publish_job_impl(job_id: int, board: str) -> dict[str, Any]:
@@ -152,7 +175,9 @@ def _publish_job_impl(job_id: int, board: str) -> dict[str, Any]:
     return entry
 
 
-def _send_prescreen_invite_impl(application_id: int, recipient: str, link: str) -> dict[str, Any]:
+def _send_prescreen_invite_impl(
+    db: Session, application_id: int, recipient: str, link: str
+) -> dict[str, Any]:
     """A7 — email a shortlisted web candidate a direct pre-screening chat link.
 
     Non-sensitive. Only meaningful for email recipients (web channel); the link
@@ -162,7 +187,26 @@ def _send_prescreen_invite_impl(application_id: int, recipient: str, link: str) 
         "pre-screening chat with our AI assistant (a human makes the final "
         f"decision).\n\nStart it here:\n{link}\n\nBest,\nRecruiting Team"
     )
+    if is_rate_limited(db, recipient, template_id="prescreen_invite"):
+        log_message(
+            db, application_id=application_id, recipient=recipient, channel="email",
+            template_id="prescreen_invite", rendered_body=body,
+            status="skipped_rate_limited",
+        )
+        entry = {
+            "kind": "prescreen_invite", "application_id": application_id,
+            "recipient": recipient, "link": link, "email_id": None,
+            "status": "skipped_rate_limited",
+        }
+        _SENT.append(entry)
+        return entry
+
     email_id = send_email(recipient, "You're shortlisted — quick pre-screening", body)
+    log_message(
+        db, application_id=application_id, recipient=recipient, channel="email",
+        template_id="prescreen_invite", rendered_body=body,
+        status="sent" if email_id else "stub", provider_message_id=email_id,
+    )
     entry = {
         "kind": "prescreen_invite",
         "application_id": application_id,
@@ -174,11 +218,18 @@ def _send_prescreen_invite_impl(application_id: int, recipient: str, link: str) 
     return entry
 
 
-def _send_whatsapp_impl(application_id: int, recipient: str, body: str) -> dict[str, Any]:
+def _send_whatsapp_impl(
+    db: Session, application_id: int, recipient: str, body: str
+) -> dict[str, Any]:
     """A5 pre-screening message over WhatsApp. Non-sensitive (no recruiter gate)
     — called from `nodes.prescreen_node` through the idempotency ledger. Delivers
     via the Meta Cloud API when configured, otherwise records to `_SENT` only."""
     wa_id = _wa_deliver(recipient, body)
+    log_message(
+        db, application_id=application_id, recipient=recipient, channel="whatsapp",
+        template_id="prescreen_question", rendered_body=body,
+        status="sent" if wa_id else "stub", provider_message_id=wa_id,
+    )
     entry = {
         "kind": "whatsapp",
         "application_id": application_id,
@@ -191,13 +242,18 @@ def _send_whatsapp_impl(application_id: int, recipient: str, body: str) -> dict[
 
 
 def _send_booking_link_impl(
-    application_id: int, recipient: str, link: str, body: str
+    db: Session, application_id: int, recipient: str, link: str, body: str
 ) -> dict[str, Any]:
     """A6 interview booking link, sent as a WhatsApp message. Non-sensitive —
     called from `nodes.schedule_node` through the idempotency ledger. `body` is
     the full prompt text delivered to the candidate; `link` is retained on the
     record for auditing."""
     wa_id = _wa_deliver(recipient, body)
+    log_message(
+        db, application_id=application_id, recipient=recipient, channel="whatsapp",
+        template_id="booking_link", rendered_body=body,
+        status="sent" if wa_id else "stub", provider_message_id=wa_id,
+    )
     entry = {
         "kind": "booking_link",
         "application_id": application_id,

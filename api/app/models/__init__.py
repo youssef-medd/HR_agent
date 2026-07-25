@@ -11,6 +11,7 @@ from app.models.application_event import ApplicationEvent
 from app.models.audit_log import AuditLog
 from app.models.idempotency_ledger import IdempotencyLedger
 from app.models.job import Job
+from app.models.message_log import MessageLog
 from app.models.needs_attention import NeedsAttention
 from app.models.user import User
 
@@ -20,6 +21,7 @@ __all__ = [
     "AuditLog",
     "IdempotencyLedger",
     "Job",
+    "MessageLog",
     "NeedsAttention",
     "User",
 ]

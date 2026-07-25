@@ -16,13 +16,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, TypedDict
 
-from langgraph.types import interrupt
-from sqlalchemy.orm import Session
-
 from app.agents.onboarder import OnboardingError, generate_onboarding_kit
 from app.models.application import Application
 from app.models.application_event import ApplicationEvent
 from app.models.job import Job
+from langgraph.types import interrupt
+from sqlalchemy.orm import Session
+
 from orchestrator.agents.masking import mask_cv
 from orchestrator.agents.parser import CVData, CVParseError, extract_text, parse_cv
 from orchestrator.agents.prescreen import (
@@ -40,13 +40,13 @@ from orchestrator.agents.scheduler import (
     interpret_booking_reply,
 )
 from orchestrator.agents.scorer import ScoreError, check_hard_filters, score_candidate
+from orchestrator.emails import portal_link
 from orchestrator.gates import (
     execute_after_offer_gate,
     execute_after_rejection_gate,
     require_gate,
 )
 from orchestrator.idempotency import with_ledger
-from orchestrator.emails import portal_link
 from orchestrator.side_effects import (
     _send_booking_link_impl,
     _send_confirmation_impl,
@@ -218,7 +218,7 @@ def send_confirmation_node(db: Session, state: NodeState) -> NodeState:
     recipient = app_row.candidate_ref if app_row is not None else "unknown@example.com"
 
     def _work() -> dict[str, Any]:
-        return _send_confirmation_impl(app_id, recipient)
+        return _send_confirmation_impl(db, app_id, recipient)
 
     try:
         with_ledger(db, app_id, "send_confirmation", attempt, _work)
@@ -373,7 +373,7 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
         invite_ref = app_row.candidate_ref
         with_ledger(
             db, app_id, "prescreen_invite", attempt,
-            lambda: _send_prescreen_invite_impl(app_id, invite_ref, portal_link(invite_ref, app_id)),
+            lambda: _send_prescreen_invite_impl(db, app_id, invite_ref, portal_link(invite_ref, app_id)),
         )
 
     # Transcript is rebuilt deterministically from the resume values on every
@@ -390,7 +390,7 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
         if channel == "whatsapp":
             with_ledger(
                 db, app_id, step, attempt,
-                lambda: _send_whatsapp_impl(app_id, recipient, body),
+                lambda: _send_whatsapp_impl(db, app_id, recipient, body),
             )
 
     # --- Consent turn -------------------------------------------------------
@@ -494,7 +494,7 @@ def schedule_node(db: Session, state: NodeState) -> NodeState:
     if channel == "whatsapp":
         with_ledger(
             db, app_id, "send_booking_link", attempt,
-            lambda: _send_booking_link_impl(app_id, recipient, link, message),
+            lambda: _send_booking_link_impl(db, app_id, recipient, link, message),
         )
     reply = _candidate_message(
         interrupt({"kind": "await_booking", "application_id": app_id, "link": link})

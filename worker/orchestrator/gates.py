@@ -23,11 +23,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from app.models.needs_attention import NeedsAttention
 from langgraph.types import interrupt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.needs_attention import NeedsAttention
 from orchestrator.side_effects import (
     _publish_job_impl,
     _send_offer_impl,
@@ -136,14 +136,14 @@ def execute_after_rejection_gate(
     db: Session, application_id: int, recipient: str, template: str
 ) -> dict[str, Any]:
     _assert_approved(db, application_id, "rejection")
-    return _send_rejection_impl(application_id, recipient, template)
+    return _send_rejection_impl(db, application_id, recipient, template)
 
 
 def execute_after_offer_gate(
     db: Session, application_id: int, recipient: str, template: str
 ) -> dict[str, Any]:
     _assert_approved(db, application_id, "offer")
-    return _send_offer_impl(application_id, recipient, template)
+    return _send_offer_impl(db, application_id, recipient, template)
 
 
 def execute_after_publish_gate(db: Session, application_id: int, job_id: int, board: str) -> dict[str, Any]:
