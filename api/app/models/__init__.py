@@ -9,6 +9,7 @@ from __future__ import annotations
 from app.models.application import Application
 from app.models.application_event import ApplicationEvent
 from app.models.audit_log import AuditLog
+from app.models.candidate import Candidate
 from app.models.idempotency_ledger import IdempotencyLedger
 from app.models.job import Job
 from app.models.message_log import MessageLog
@@ -19,6 +20,7 @@ __all__ = [
     "Application",
     "ApplicationEvent",
     "AuditLog",
+    "Candidate",
     "IdempotencyLedger",
     "Job",
     "MessageLog",

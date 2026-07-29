@@ -24,6 +24,9 @@ class Application(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     job_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    # A3 dedup links repeat applicants to one candidate identity (nullable until
+    # the CV is parsed and deduplicated).
+    candidate_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     candidate_ref: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     state: Mapped[str] = mapped_column(String(32), nullable=False, default="RECEIVED", index=True)
     payload: Mapped[dict] = mapped_column(_JSON, nullable=False, default=dict)

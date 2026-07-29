@@ -49,6 +49,7 @@ from orchestrator.agents.scheduler import (
     propose_slots,
 )
 from orchestrator.agents.scorer import ScoreError, check_hard_filters, score_candidate
+from orchestrator.dedup import dedup_candidate
 from orchestrator.emails import portal_link
 from orchestrator.gates import (
     execute_after_offer_gate,
@@ -149,13 +150,19 @@ def parse_node(db: Session, state: NodeState) -> NodeState:
         return _advance(db, state, State.NEEDS_ATTENTION, "parse_failed")
 
     cv_data = parsed["cv"]
+    # A3 dedup: resolve to a candidate identity (email/phone hash) and record
+    # the verdict. Runs on the node session so the candidate row + attachment
+    # commit atomically with the PARSED transition.
+    verdict = dedup_candidate(db, cv_data)
     if app_row is not None:
+        app_row.candidate_id = verdict["candidate_id"]
         app_row.payload = {
             **app_row.payload,
             "cv": cv_data,
             "raw_text": parsed["raw_text"],
             "parser_version": PARSER_VERSION,
             "language": cv_data.get("language", ""),
+            "dedup": verdict,
         }
     state.setdefault("scratch", {})["cv"] = cv_data
     return _advance(db, state, State.PARSED, "parse")
