@@ -9,6 +9,7 @@ python-multipart>=0.0.9
 sqlalchemy>=2.0
 alembic>=1.13
 psycopg[binary]>=3.2
+pgvector>=0.3  # A4 semantic pre-ranking (bge-m3 embeddings)
 
 # Auth
 bcrypt>=4.2

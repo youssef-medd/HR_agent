@@ -60,12 +60,14 @@ from orchestrator.agents.scorer import (
 )
 from orchestrator.dedup import dedup_candidate
 from orchestrator.emails import portal_link
+from orchestrator.embeddings import store_application_embedding
 from orchestrator.gates import (
     execute_after_offer_gate,
     execute_after_rejection_gate,
     require_gate,
 )
 from orchestrator.idempotency import with_ledger
+from orchestrator.semantic import semantic_enabled, semantic_features
 from orchestrator.side_effects import (
     _send_booking_link_impl,
     _send_confirmation_impl,
@@ -211,6 +213,11 @@ def score_node(db: Session, state: NodeState) -> NodeState:
             "prompt_version": SCORE_PROMPT_VERSION,
             "run_seed": 42,
         }
+        # A4 stage 2: semantic pre-ranking features (env-gated). Also persists the
+        # profile embedding to pgvector for batch pre-ranking.
+        if semantic_enabled():
+            data["semantic"] = semantic_features((job_spec.get("spec") or {}), payload.get("cv") or {})
+            store_application_embedding(db, app_id, payload.get("cv") or {})
         if unmet:
             # Hard-filter failure overrides the judge: decline (human-gated),
             # never auto-sent. Recorded for the recruiter to see the reason.
