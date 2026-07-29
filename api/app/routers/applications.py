@@ -42,6 +42,8 @@ class ApplicationView(BaseModel):
     candidate_ref: str
     state: str
     cv: dict[str, Any] | None = None
+    # Full A4 ScoreCard (sub-scores, evidence, provenance, semantic features).
+    score: dict[str, Any] | None = None
 
 
 class ApplicationSummary(BaseModel):
@@ -205,6 +207,7 @@ def get_application(
         candidate_ref=row.candidate_ref,
         state=row.state,
         cv=row.payload.get("cv"),
+        score=row.payload.get("score"),
     )
 
 

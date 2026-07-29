@@ -49,6 +49,30 @@ def test_upload_creates_application_and_enqueues(client, auth_header, _stub_enqu
     assert view.status_code == 200
     assert view.json()["candidate_ref"] == "jane@example.com"
     assert view.json()["cv"] is None  # not parsed yet (worker not run in unit test)
+    assert view.json()["score"] is None  # ScoreCard surfaced once A4 has run
+
+
+def test_get_application_surfaces_scorecard(client, auth_header):
+    from app.db import get_db
+    from app.models.application import Application
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        row = Application(
+            job_id=1, candidate_ref="s@x.io", state="SCORED",
+            payload={"score": {"overall": 82, "recommendation": "shortlist",
+                               "evidence": [{"dimension": "skills_match", "quote": "Python"}]}},
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        app_id = row.id
+    finally:
+        db.close()
+
+    body = client.get(f"/applications/{app_id}", headers=auth_header).json()
+    assert body["score"]["overall"] == 82
+    assert body["score"]["evidence"][0]["quote"] == "Python"
 
 
 def test_upload_rejects_unsupported_extension(client, auth_header):

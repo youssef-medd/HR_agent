@@ -49,12 +49,33 @@ export interface CVData {
   education: CVEducation[];
 }
 
+export interface ScoreEvidence {
+  dimension: string;
+  quote: string;
+}
+
+export interface ScoreCard {
+  overall: number;
+  skills_match: number;
+  experience_match: number;
+  education_match: number;
+  sector_context_fit: number;
+  rationale: string;
+  recommendation: string;
+  evidence: ScoreEvidence[];
+  hard_filter_failures?: string[];
+  weights_used?: Record<string, number> | string;
+  provenance?: { model: string; prompt_version: string; run_seed: number };
+  semantic?: { skills_sim: number; experience_sim: number; prerank_score: number };
+}
+
 export interface ApplicationView {
   id: number;
   job_id: number;
   candidate_ref: string;
   state: string;
   cv: CVData | null;
+  score: ScoreCard | null;
 }
 
 export interface ApplicationSummary {
