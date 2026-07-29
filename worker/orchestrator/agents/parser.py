@@ -50,6 +50,10 @@ class Experience(BaseModel):
     start: str = Field(default="", description="Start date as written on the CV")
     end: str = Field(default="", description="End date, or 'present'")
     summary: str = Field(default="", description="One-line description of the role")
+    # Traceability to the source document (spec §A3): the page and a short
+    # verbatim snippet supporting this entry, used for A4 evidence links.
+    source_page: int | None = Field(default=None)
+    source_snippet: str = Field(default="")
 
     @field_validator("start", "end", mode="before")
     @classmethod
@@ -119,11 +123,11 @@ class CVParseError(RuntimeError):
     """Raised when no text can be extracted from the source document."""
 
 
-def extract_text(filename: str, data: bytes) -> str:
-    """Extract plain text from CV bytes, dispatching on file extension.
+def extract_pages(filename: str, data: bytes) -> list[str]:
+    """Extract text per page, dispatching on extension.
 
-    Lazy-imports the heavy parsers so a caller that only needs the LLM stage
-    (or the test suite mocking it) does not pay the import cost.
+    PDF yields one entry per page (for source-page traceability); DOCX and
+    plain text yield a single entry. Lazy-imports the heavy parsers.
     """
     name = filename.lower()
 
@@ -131,23 +135,52 @@ def extract_text(filename: str, data: bytes) -> str:
         import fitz  # PyMuPDF
 
         with fitz.open(stream=data, filetype="pdf") as doc:
-            text = "\n".join(page.get_text() for page in doc)
+            return [page.get_text() for page in doc]
     elif name.endswith(".docx"):
         import io
 
         from docx import Document
 
         doc = Document(io.BytesIO(data))
-        text = "\n".join(p.text for p in doc.paragraphs)
+        return ["\n".join(p.text for p in doc.paragraphs)]
     elif name.endswith((".txt", ".md")):
-        text = data.decode("utf-8", errors="replace")
-    else:
-        raise CVParseError(f"Unsupported CV file type: {filename!r}")
+        return [data.decode("utf-8", errors="replace")]
+    raise CVParseError(f"Unsupported CV file type: {filename!r}")
 
-    text = text.strip()
+
+def extract_text(filename: str, data: bytes) -> str:
+    """Extract plain text from CV bytes (all pages joined)."""
+    text = "\n".join(extract_pages(filename, data)).strip()
     if not text:
         raise CVParseError(f"No text extracted from {filename!r} (scanned PDF? OCR not wired yet)")
     return text
+
+
+def attach_sources(cv: CVData, pages: list[str]) -> CVData:
+    """Tag each experience with the source page + snippet it was drawn from.
+
+    Locates the first page whose text mentions the role's company (or title)
+    and captures a short window around it. Best-effort: entries with no match
+    keep empty source fields.
+    """
+    if not pages:
+        return cv
+    norm_pages = [(" ".join(p.split())).lower() for p in pages]
+    updated: list[Experience] = []
+    for exp in cv.experiences:
+        needle = (exp.company or exp.title or "").strip().lower()
+        page_no: int | None = None
+        snippet = ""
+        if needle:
+            for i, page in enumerate(norm_pages):
+                pos = page.find(needle)
+                if pos != -1:
+                    page_no = i + 1  # 1-based
+                    start = max(0, pos - 40)
+                    snippet = page[start : pos + len(needle) + 80].strip()
+                    break
+        updated.append(exp.model_copy(update={"source_page": page_no, "source_snippet": snippet}))
+    return cv.model_copy(update={"experiences": updated})
 
 
 _SYSTEM_PROMPT = (

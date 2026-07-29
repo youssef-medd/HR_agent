@@ -28,7 +28,8 @@ from orchestrator.agents.parser import (
     PARSER_VERSION,
     CVData,
     CVParseError,
-    extract_text,
+    attach_sources,
+    extract_pages,
     parse_cv,
 )
 from orchestrator.agents.prescreen import (
@@ -98,26 +99,26 @@ def _advance(db: Session, state: NodeState, to_state: State, step: str) -> NodeS
     return state
 
 
-def _resolve_cv_text(payload: dict[str, Any]) -> str:
-    """Turn the CV reference on an application's payload into plain text.
+def _resolve_cv_pages(payload: dict[str, Any]) -> list[str]:
+    """Per-page CV text from the payload's CV reference (for source spans).
 
-    Accepts, in priority order: pre-extracted `cv_text`; a base64 document
-    (`cv_b64` + `cv_filename`) as produced by the upload endpoint; or a
-    container-visible `cv_path`. Raises `CVParseError` when none is present.
+    Priority: pre-extracted `cv_text` (single page); a base64 document
+    (`cv_b64` + `cv_filename`); or a container-visible `cv_path`. Raises
+    `CVParseError` when none is present.
     """
     if payload.get("cv_text"):
-        return str(payload["cv_text"])
+        return [str(payload["cv_text"])]
 
     filename = payload.get("cv_filename")
     if payload.get("cv_b64") and filename:
         import base64
 
-        return extract_text(filename, base64.b64decode(payload["cv_b64"]))
+        return extract_pages(filename, base64.b64decode(payload["cv_b64"]))
 
     if payload.get("cv_path"):
         path = str(payload["cv_path"])
         with open(path, "rb") as fh:
-            return extract_text(path, fh.read())
+            return extract_pages(path, fh.read())
 
     raise CVParseError("No CV source on application payload (cv_text / cv_b64 / cv_path)")
 
@@ -128,9 +129,11 @@ def parse_node(db: Session, state: NodeState) -> NodeState:
     payload = dict(app_row.payload) if app_row is not None else {}
 
     def _work() -> dict[str, Any]:
-        raw_text = _resolve_cv_text(payload)
+        pages = _resolve_cv_pages(payload)
+        raw_text = "\n".join(pages)
         cv = parse_cv(raw_text, user_id=str(state["application_id"]))
-        # Retain traceability to the source text (spec §A3 I/O contract).
+        # Tag each experience with its source page + snippet (spec §A3 → A4 evidence).
+        cv = attach_sources(cv, pages)
         return {"cv": cv.model_dump(), "raw_text": raw_text}
 
     try:

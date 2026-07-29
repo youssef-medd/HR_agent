@@ -87,6 +87,29 @@ def test_parse_cv_wraps_schema_drift_as_parse_error(monkeypatch):
         parse_cv("some cv text")
 
 
+def test_extract_pages_plaintext_single_page():
+    from orchestrator.agents.parser import extract_pages
+
+    assert extract_pages("cv.txt", b"line1\nline2") == ["line1\nline2"]
+
+
+def test_attach_sources_tags_page_and_snippet():
+    from orchestrator.agents.parser import CVData, Experience, attach_sources
+
+    pages = [
+        "Header page with a summary and skills.",
+        "Experience\nSoftware Engineer at Acme Corp 2019-2022 building APIs.",
+    ]
+    cv = CVData(experiences=[
+        Experience(title="Software Engineer", company="Acme Corp", start="2019", end="2022"),
+        Experience(title="Ghost", company="Nowhere Inc"),  # not in any page
+    ])
+    tagged = attach_sources(cv, pages)
+    assert tagged.experiences[0].source_page == 2
+    assert "acme corp" in tagged.experiences[0].source_snippet
+    assert tagged.experiences[1].source_page is None  # no match -> empty
+
+
 def test_compute_years_experience_from_date_ranges():
     from orchestrator.agents.parser import Experience, compute_years_experience
 
