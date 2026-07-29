@@ -104,9 +104,10 @@ def test_score_candidate_uses_judge_profile(monkeypatch):
     result = score_candidate({"skills": ["Python"]}, "Backend role", user_id="7")
 
     assert isinstance(result, ScoreResult)
-    # overall + recommendation recomputed deterministically: .5*90+.35*80+.15*60 = 82
-    assert result.overall == 82
-    assert result.recommendation == "shortlist"
+    # overall recomputed with spec weights 30/30/20/20 (sector defaults to 0 here):
+    # .3*90 + .3*80 + .2*60 + .2*0 = 63
+    assert result.overall == 63
+    assert result.recommendation == "pool"
     assert captured["profile"] == "judge"
     assert captured["schema"] is ScoreResult
     assert captured["metadata"]["agent"] == "A4"
@@ -115,13 +116,19 @@ def test_score_candidate_uses_judge_profile(monkeypatch):
 def test_finalize_weighted_bands():
     from orchestrator.agents.scorer import _finalize
 
-    # pool band: .5*60+.35*50+.15*40 = 53.5 -> 54
-    mid = _finalize(ScoreResult(overall=0, skills_match=60, experience_match=50, education_match=40))
-    assert mid.overall == 54 and mid.recommendation == "pool"
+    # spec weights 30/30/20/20. shortlist: .3*80+.3*80+.2*70+.2*60 = 74
+    hi = _finalize(ScoreResult(
+        overall=0, skills_match=80, experience_match=80,
+        education_match=70, sector_context_fit=60,
+    ))
+    assert hi.overall == 74 and hi.recommendation == "shortlist"
 
-    # decline band
-    low = _finalize(ScoreResult(overall=99, skills_match=20, experience_match=10, education_match=0))
-    assert low.overall == 14 and low.recommendation == "decline"
+    # decline band: .3*20+.3*10+.2*0+.2*0 = 9
+    low = _finalize(ScoreResult(
+        overall=99, skills_match=20, experience_match=10,
+        education_match=0, sector_context_fit=0,
+    ))
+    assert low.overall == 9 and low.recommendation == "decline"
 
 
 def test_score_candidate_wraps_validation_error(monkeypatch):
@@ -197,9 +204,9 @@ def test_evidence_verification_drops_hallucinated_quotes(monkeypatch):
 
     quotes = [(e.dimension, e.quote) for e in result.evidence]
     assert quotes == [("skills_match", "Python")]  # only the verifiable, known-dim quote
-    assert result.sector_context_fit == 70  # 4th subscore passes through
-    # overall still derives from the 3 core dimensions: .5*80+.35*60+.15*50 = 68.5 -> 68
-    assert result.overall == 68
+    assert result.sector_context_fit == 70  # 4th subscore
+    # spec weights 30/30/20/20: .3*80+.3*60+.2*50+.2*70 = 66
+    assert result.overall == 66
 
 
 def test_verify_evidence_normalizes_whitespace_and_case():
@@ -213,17 +220,54 @@ def test_verify_evidence_normalizes_whitespace_and_case():
 
 
 def test_check_hard_filters(monkeypatch):
-    from orchestrator.agents.scorer import HardFilterCheck, check_hard_filters
+    from orchestrator.agents.scorer import HardFilterCheck
 
     # no criteria -> no LLM call, empty result
     monkeypatch.setattr(scorer_mod, "llm_call", lambda **_: (_ for _ in ()).throw(AssertionError()))
-    assert check_hard_filters({}, []) == []
+    assert scorer_mod.check_hard_filters({}, []) == []
 
     # criteria present -> returns the unmet subset
     monkeypatch.setattr(
         scorer_mod, "llm_call", lambda **_: HardFilterCheck(unmet=["Work permit"])
     )
-    assert check_hard_filters({"skills": ["Python"]}, ["Work permit", "Python"]) == ["Work permit"]
+    assert scorer_mod.check_hard_filters({"skills": ["Python"]}, ["Work permit", "Python"]) == ["Work permit"]
+
+
+def test_hard_filter_min_years_in_code(monkeypatch):
+    # Min-years is decided in code with NO LLM call.
+    monkeypatch.setattr(scorer_mod, "llm_call", lambda **_: (_ for _ in ()).throw(AssertionError()))
+    assert scorer_mod.check_hard_filters({"years_experience": 6}, ["5+ years experience"]) == []
+    assert scorer_mod.check_hard_filters({"years_experience": 3}, ["5 years experience"]) == \
+        ["5 years experience"]
+
+
+def test_hard_filter_required_language_in_code(monkeypatch):
+    monkeypatch.setattr(scorer_mod, "llm_call", lambda **_: (_ for _ in ()).throw(AssertionError()))
+    assert scorer_mod.check_hard_filters({"languages": ["English", "Arabic"]}, ["Fluent English required"]) == []
+    assert scorer_mod.check_hard_filters({"languages": ["English"]}, ["French language required"]) == \
+        ["French language required"]
+
+
+def test_evidence_verified_against_raw_text(monkeypatch):
+    from orchestrator.agents.scorer import Evidence
+
+    def fake(*, profile, messages, schema, **_):
+        return ScoreResult(
+            overall=0, skills_match=70, experience_match=60,
+            education_match=50, sector_context_fit=50,
+            evidence=[
+                Evidence(dimension="experience_match", quote="shipped payments platform"),
+                Evidence(dimension="skills_match", quote="invented framework"),  # not in raw
+            ],
+        )
+
+    monkeypatch.setattr(scorer_mod, "llm_call", fake)
+    # masked profile is sparse; the real quote lives in raw_text.
+    result = score_candidate(
+        {"skills": []}, "jd", raw_text="Led the team that shipped payments platform in 2021."
+    )
+    quotes = [e.quote for e in result.evidence]
+    assert quotes == ["shipped payments platform"]  # raw_text-verified kept, hallucination dropped
 
 
 def test_score_node_hard_filter_forces_decline(db_factory, monkeypatch):

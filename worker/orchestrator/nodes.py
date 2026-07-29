@@ -13,6 +13,7 @@ work goes through `orchestrator.gates`.
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from typing import Any, TypedDict
 
@@ -49,7 +50,14 @@ from orchestrator.agents.scheduler import (
     interpret_booking_reply,
     propose_slots,
 )
-from orchestrator.agents.scorer import ScoreError, check_hard_filters, score_candidate
+from orchestrator.agents.scorer import (
+    PROMPT_VERSION as SCORE_PROMPT_VERSION,
+)
+from orchestrator.agents.scorer import (
+    ScoreError,
+    check_hard_filters,
+    score_candidate,
+)
 from orchestrator.dedup import dedup_candidate
 from orchestrator.emails import portal_link
 from orchestrator.gates import (
@@ -192,10 +200,17 @@ def score_node(db: Session, state: NodeState) -> NodeState:
         masked = mask_cv(cv)
         unmet = check_hard_filters(masked, eliminatory, user_id=str(app_id))
         result = score_candidate(
-            masked, payload.get("jd_text"), weights=weights, user_id=str(app_id)
+            masked, payload.get("jd_text"), weights=weights,
+            raw_text=payload.get("raw_text"), user_id=str(app_id),
         )
         data = result.model_dump()
         data["weights_used"] = weights or "default"
+        # Reproducibility (spec §A4): persist the provenance of this ScoreCard.
+        data["provenance"] = {
+            "model": os.environ.get("MODEL_JUDGE", ""),
+            "prompt_version": SCORE_PROMPT_VERSION,
+            "run_seed": 42,
+        }
         if unmet:
             # Hard-filter failure overrides the judge: decline (human-gated),
             # never auto-sent. Recorded for the recruiter to see the reason.

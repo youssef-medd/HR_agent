@@ -14,6 +14,7 @@ Constraints from the spec:
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Literal
 
 from app.gateway import llm_call
@@ -101,9 +102,14 @@ _SYSTEM_PROMPT = (
 )
 
 # Deterministic weighting — the persisted `overall` and `recommendation` are
-# computed here, not taken from the model. Skills dominate; education matters
-# least (spec: projects and shipped work over pedigree).
-_WEIGHTS = {"skills_match": 0.50, "experience_match": 0.35, "education_match": 0.15}
+# computed here, not taken from the model. Spec §A4 default: experience 30,
+# skills 30, education 20, sector/context 20 (all configurable per offer).
+_WEIGHTS = {
+    "skills_match": 0.30,
+    "experience_match": 0.30,
+    "education_match": 0.20,
+    "sector_context_fit": 0.20,
+}
 _SHORTLIST_AT = 70
 _POOL_AT = 45
 
@@ -111,18 +117,26 @@ _POOL_AT = 45
 def _weight_fractions(weights: dict[str, Any] | None) -> dict[str, float]:
     """Per-job weights (A1's JobSpec) as fractions summing to 1, else the default.
 
-    Accepts integer importances like {"skills": 55, "experience": 35,
-    "education": 10}; falls back to the fixed defaults when absent or degenerate.
+    Accepts integer importances like {"skills": 30, "experience": 30,
+    "education": 20, "sector": 20}; falls back to the fixed defaults when absent
+    or degenerate. A missing `sector` weight is treated as 0 so older specs
+    still work.
     """
     if not weights:
         return _WEIGHTS
     s = float(weights.get("skills", 0) or 0)
     e = float(weights.get("experience", 0) or 0)
     d = float(weights.get("education", 0) or 0)
-    total = s + e + d
+    c = float(weights.get("sector", 0) or 0)
+    total = s + e + d + c
     if total <= 0:
         return _WEIGHTS
-    return {"skills_match": s / total, "experience_match": e / total, "education_match": d / total}
+    return {
+        "skills_match": s / total,
+        "experience_match": e / total,
+        "education_match": d / total,
+        "sector_context_fit": c / total,
+    }
 
 
 def _normalize(text: str) -> str:
@@ -135,15 +149,19 @@ def _profile_haystack(masked_cv: dict[str, Any]) -> str:
     return _normalize(json.dumps(masked_cv, ensure_ascii=False))
 
 
-def _verify_evidence(evidence: list[Evidence], masked_cv: dict[str, Any]) -> list[Evidence]:
-    """Drop citations whose quote is not a verbatim span of the masked profile.
+def _verify_evidence(
+    evidence: list[Evidence], masked_cv: dict[str, Any], raw_text: str | None = None
+) -> list[Evidence]:
+    """Drop citations whose quote is not a verbatim span of the source.
 
-    The judge only ever sees the masked profile, so every legitimate quote must
-    appear there. Anything that does not is a hallucinated citation and is
-    removed before the score is persisted. Empty quotes and unknown dimensions
-    are also dropped.
+    Spec §A4 requires every evidence citation to exist in the candidate's
+    raw_text; when it is available the quote is checked against it (plus the
+    masked profile the judge actually saw). Hallucinated quotes, empty quotes,
+    and unknown dimensions are removed before the score is persisted.
     """
     haystack = _profile_haystack(masked_cv)
+    if raw_text:
+        haystack = haystack + " " + _normalize(raw_text)
     verified: list[Evidence] = []
     for item in evidence:
         quote = _normalize(item.quote)
@@ -161,6 +179,7 @@ def _finalize(raw: ScoreResult, weights: dict[str, Any] | None = None) -> ScoreR
         raw.skills_match * w["skills_match"]
         + raw.experience_match * w["experience_match"]
         + raw.education_match * w["education_match"]
+        + raw.sector_context_fit * w.get("sector_context_fit", 0.0)
     )
     recommendation: Recommendation = (
         "shortlist" if overall >= _SHORTLIST_AT else "pool" if overall >= _POOL_AT else "decline"
@@ -181,6 +200,40 @@ _HARD_FILTER_SYSTEM = (
 )
 
 
+_MIN_YEARS_RE = re.compile(r"(\d+)\s*\+?\s*(?:years?|ans|année)", re.IGNORECASE)
+_KNOWN_LANGS = {
+    "english": ("english", "anglais"),
+    "french": ("french", "français", "francais"),
+    "arabic": ("arabic", "arabe"),
+    "german": ("german", "allemand"),
+    "spanish": ("spanish", "espagnol"),
+}
+
+
+def _code_hard_filter(masked_cv: dict[str, Any], criterion: str) -> bool | None:
+    """Evaluate one eliminatory criterion in pure code (spec §A4 stage 1).
+
+    Returns True (met), False (unmet), or None when the criterion is free-text
+    the code layer cannot decide — deferred to the LLM checker. Handles the two
+    structured cases the spec calls out: minimum years and a required language.
+    """
+    low = criterion.lower()
+
+    m = _MIN_YEARS_RE.search(low)
+    if m and any(k in low for k in ("experience", "expérience", "exp")):
+        required = float(m.group(1))
+        have = masked_cv.get("years_experience")
+        return have is not None and float(have) >= required
+
+    if any(w in low for w in ("language", "langue", "fluent", "courant", "maîtrise", "speak")):
+        profile_langs = " ".join(str(x) for x in (masked_cv.get("languages") or [])).lower()
+        for aliases in _KNOWN_LANGS.values():
+            if any(a in low for a in aliases):
+                return any(a in profile_langs for a in aliases)
+
+    return None
+
+
 def check_hard_filters(
     masked_cv: dict[str, Any],
     criteria: list[str],
@@ -189,31 +242,46 @@ def check_hard_filters(
 ) -> list[str]:
     """Return the eliminatory criteria the candidate does NOT meet (empty = pass).
 
-    No LLM call when there are no criteria. On schema drift, fails open (returns
-    []) rather than blocking a candidate on a checker error.
+    Code-first (spec §A4 stage 1): structured criteria (minimum years, required
+    language) are decided in code with no LLM. Only the remaining free-text
+    criteria go to the LLM checker. On schema drift the LLM layer fails open.
     """
     if not criteria:
         return []
-    user_content = (
-        f"HARD REQUIREMENTS:\n{json.dumps(criteria, ensure_ascii=False)}\n\n"
-        f"CANDIDATE PROFILE (identity-masked):\n{json.dumps(masked_cv, ensure_ascii=False)}"
-    )
-    try:
-        result: HardFilterCheck = llm_call(
-            profile="extractor",
-            messages=[
-                {"role": "system", "content": _HARD_FILTER_SYSTEM},
-                {"role": "user", "content": user_content},
-            ],
-            schema=HardFilterCheck,
-            user_id=user_id,
-            metadata={"agent": "A4", "prompt_version": PROMPT_VERSION, "stage": "hard_filter"},
+
+    unmet: list[str] = []
+    residual: list[str] = []
+    for c in criteria:
+        decided = _code_hard_filter(masked_cv, c)
+        if decided is True:
+            continue
+        if decided is False:
+            unmet.append(c)
+        else:
+            residual.append(c)
+
+    if residual:
+        user_content = (
+            f"HARD REQUIREMENTS:\n{json.dumps(residual, ensure_ascii=False)}\n\n"
+            f"CANDIDATE PROFILE (identity-masked):\n{json.dumps(masked_cv, ensure_ascii=False)}"
         )
-    except ValidationError:
-        return []
-    # Only echo back criteria that were actually asked about.
-    wanted = {c.strip().lower() for c in criteria}
-    return [u for u in result.unmet if u.strip().lower() in wanted] or result.unmet
+        try:
+            result: HardFilterCheck = llm_call(
+                profile="extractor",
+                messages=[
+                    {"role": "system", "content": _HARD_FILTER_SYSTEM},
+                    {"role": "user", "content": user_content},
+                ],
+                schema=HardFilterCheck,
+                user_id=user_id,
+                metadata={"agent": "A4", "prompt_version": PROMPT_VERSION, "stage": "hard_filter"},
+            )
+            wanted = {c.strip().lower() for c in residual}
+            llm_unmet = [u for u in result.unmet if u.strip().lower() in wanted] or result.unmet
+            unmet.extend(llm_unmet)
+        except ValidationError:
+            pass  # fail open on the free-text residue rather than block a candidate
+    return unmet
 
 
 def score_candidate(
@@ -221,9 +289,13 @@ def score_candidate(
     jd_text: str | None,
     *,
     weights: dict[str, Any] | None = None,
+    raw_text: str | None = None,
     user_id: str | None = None,
 ) -> ScoreResult:
-    """Score a masked candidate against a job description via the judge model."""
+    """Score a masked candidate against a job description via the judge model.
+
+    `raw_text`, when given, is the source the evidence citations are verified
+    against (spec §A4 acceptance criterion)."""
     jd = (jd_text or "").strip()
     jd_block = jd if jd else "(No job description provided — score general seniority and strength.)"
 
@@ -245,5 +317,7 @@ def score_candidate(
         )
     except ValidationError as exc:
         raise ScoreError(f"Judge output did not match ScoreResult schema: {exc}") from exc
-    result = result.model_copy(update={"evidence": _verify_evidence(result.evidence, masked_cv)})
+    result = result.model_copy(
+        update={"evidence": _verify_evidence(result.evidence, masked_cv, raw_text)}
+    )
     return _finalize(result, weights)

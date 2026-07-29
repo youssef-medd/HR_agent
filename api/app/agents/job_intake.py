@@ -33,10 +33,12 @@ class JobSpec(BaseModel):
 
 
 class Weights(BaseModel):
-    # Sum ~100. Mirrors A4's sub-scores so the recruiter can tune importance.
-    skills: int = Field(default=50, ge=0, le=100)
-    experience: int = Field(default=35, ge=0, le=100)
-    education: int = Field(default=15, ge=0, le=100)
+    # Sum ~100. Mirrors A4's four sub-scores (spec §A4 default 30/30/20/20) so
+    # the recruiter can tune per-offer importance.
+    skills: int = Field(default=30, ge=0, le=100)
+    experience: int = Field(default=30, ge=0, le=100)
+    education: int = Field(default=20, ge=0, le=100)
+    sector: int = Field(default=20, ge=0, le=100)
 
 
 class ChannelContent(BaseModel):
@@ -63,8 +65,9 @@ _SYSTEM_PROMPT = (
     "must_have, nice_to_have, languages, eliminatory_criteria (hard requirements "
     "that disqualify a candidate if unmet — keep this list tight and only truly "
     "disqualifying items).\n"
-    "2) weights: integer importance for skills, experience, education that sum to "
-    "about 100, reflecting THIS role.\n"
+    "2) weights: integer importance for skills, experience, education, sector "
+    "(sector = domain/industry-context fit) that sum to about 100, reflecting "
+    "THIS role.\n"
     "3) channels: ready-to-post content — linkedin_post (engaging, with hashtags), "
     "job_board_text (neutral, structured), careers_page (warm, on-brand), "
     "whatsapp_blurb (max 2 short sentences).\n"
