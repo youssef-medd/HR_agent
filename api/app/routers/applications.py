@@ -44,6 +44,8 @@ class ApplicationView(BaseModel):
     cv: dict[str, Any] | None = None
     # Full A4 ScoreCard (sub-scores, evidence, provenance, semantic features).
     score: dict[str, Any] | None = None
+    # A5 pre-screening block: transcript, consent, answers, summary, slots, flags.
+    prescreen: dict[str, Any] | None = None
 
 
 class ApplicationSummary(BaseModel):
@@ -208,6 +210,7 @@ def get_application(
         state=row.state,
         cv=row.payload.get("cv"),
         score=row.payload.get("score"),
+        prescreen=row.payload.get("prescreen"),
     )
 
 

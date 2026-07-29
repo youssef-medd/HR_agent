@@ -1,4 +1,5 @@
 import { OnboardDialog } from "@/components/applications/onboard-dialog";
+import { PrescreenDialog } from "@/components/applications/prescreen-dialog";
 import { ScoreCardDialog } from "@/components/applications/score-card-dialog";
 import { UploadCvDialog } from "@/components/applications/upload-cv-dialog";
 import { PageHeader } from "@/components/shell/page-header";
@@ -29,6 +30,17 @@ const PIPELINE: ApplicationState[] = [
 ];
 
 const ONBOARD_STATES: ReadonlySet<string> = new Set([
+  "INTERVIEWED",
+  "OFFER",
+  "HIRED",
+  "ONBOARDING",
+]);
+
+// States at or past pre-screening — a prescreen block exists to show.
+const PRESCREEN_STATES: ReadonlySet<string> = new Set([
+  "PRESCREENING",
+  "PRESCREENED",
+  "INTERVIEW_SCHEDULED",
   "INTERVIEWED",
   "OFFER",
   "HIRED",
@@ -85,6 +97,12 @@ export default async function ApplicationsPage() {
                         </p>
                         {app.score !== null && (
                           <ScoreCardDialog
+                            appId={app.id}
+                            name={app.full_name || app.candidate_ref}
+                          />
+                        )}
+                        {PRESCREEN_STATES.has(state) && (
+                          <PrescreenDialog
                             appId={app.id}
                             name={app.full_name || app.candidate_ref}
                           />

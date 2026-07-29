@@ -69,6 +69,27 @@ export interface ScoreCard {
   semantic?: { skills_sim: number; experience_sim: number; prerank_score: number };
 }
 
+export interface PrescreenMessage {
+  role: string;
+  text: string;
+}
+
+export interface PrescreenBlock {
+  status?: string;
+  channel?: string;
+  consent?: { given: boolean | null; at: string | null };
+  answers?: { q: string; a: string; at?: string }[];
+  transcript?: PrescreenMessage[];
+  summary?: string;
+  slots?: Record<string, string>;
+  flags?: {
+    contradictions?: string[];
+    red_flags?: string[];
+    great_signals?: string[];
+    conversation?: string[];
+  };
+}
+
 export interface ApplicationView {
   id: number;
   job_id: number;
@@ -76,6 +97,7 @@ export interface ApplicationView {
   state: string;
   cv: CVData | null;
   score: ScoreCard | null;
+  prescreen: PrescreenBlock | null;
 }
 
 export interface ApplicationSummary {
