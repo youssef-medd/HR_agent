@@ -7,7 +7,11 @@ missing CV source routes the application to NEEDS_ATTENTION).
 
 from __future__ import annotations
 
-from orchestrator.agents.parser import CVData
+import pytest
+from app.models.application import Application
+
+from orchestrator.agents import parser as parser_mod
+from orchestrator.agents.parser import CVData, CVParseError, extract_text, parse_cv
 
 
 def test_cvdata_coerces_int_year_and_dates():
@@ -21,12 +25,6 @@ def test_cvdata_coerces_int_year_and_dates():
     )
     assert cv.education[0].year == "2019"
     assert cv.experiences[0].start == "2020" and cv.experiences[0].end == "2024"
-
-import pytest
-
-from app.models.application import Application
-from orchestrator.agents import parser as parser_mod
-from orchestrator.agents.parser import CVData, CVParseError, extract_text, parse_cv
 
 
 def test_extract_text_plaintext_passthrough():
@@ -58,7 +56,7 @@ def test_parse_cv_invokes_gateway_with_schema(monkeypatch):
     assert cv.full_name == "Jane Doe"
     assert captured["profile"] == "extractor"
     assert captured["schema"] is CVData
-    assert captured["metadata"]["agent"] == "A1"
+    assert captured["metadata"]["agent"] == "A3"
 
 
 def test_parse_cv_rejects_empty_text():
@@ -89,6 +87,65 @@ def test_parse_cv_wraps_schema_drift_as_parse_error(monkeypatch):
         parse_cv("some cv text")
 
 
+def test_compute_years_experience_from_date_ranges():
+    from orchestrator.agents.parser import Experience, compute_years_experience
+
+    exps = [
+        Experience(title="A", start="2018", end="2021"),   # 3
+        Experience(title="B", start="2021", end="present"),  # to now
+        Experience(title="C", start="bad", end="also-bad"),  # ignored
+    ]
+    total = compute_years_experience(exps)
+    assert total is not None and total >= 3
+    # No parseable dates -> None
+    assert compute_years_experience([Experience(title="X")]) is None
+
+
+def test_compute_years_clamps_reversed_dates():
+    from orchestrator.agents.parser import Experience, compute_years_experience
+
+    # end before start -> 0, not negative
+    assert compute_years_experience([Experience(start="2022", end="2019")]) == 0.0
+
+
+def test_detect_language_en_fr():
+    from orchestrator.agents.parser import detect_language
+
+    assert detect_language("This is an English CV about backend engineering and cloud.") == "en"
+    assert detect_language("Ceci est un CV en français pour un poste d'ingénieur backend.") == "fr"
+    assert detect_language("short") == ""  # too short to detect
+
+
+def test_parse_cv_computes_experience_and_language(monkeypatch):
+    # The LLM's years_experience guess is overridden by the code computation.
+    def fake(*, profile, messages, schema, **_):
+        return CVData(
+            full_name="Jane", years_experience=99.0,
+            experiences=[parser_mod.Experience(title="Dev", start="2019", end="2022")],
+        )
+
+    monkeypatch.setattr(parser_mod, "llm_call", fake)
+    cv = parse_cv("A reasonably long English CV text for language detection to work well.")
+    assert cv.years_experience == 3.0  # computed, not 99
+    assert cv.language == "en"
+
+
+def test_parse_cv_repairs_on_first_failure(monkeypatch):
+    # extractor raises schema drift -> repair pass (judge) succeeds.
+    calls: list[str] = []
+
+    def fake(*, profile, messages, schema, **_):
+        calls.append(profile)
+        if profile == "extractor":
+            return CVData.model_validate({"experiences": "not-a-list"})  # ValidationError
+        return CVData(full_name="Repaired")
+
+    monkeypatch.setattr(parser_mod, "llm_call", fake)
+    cv = parse_cv("some cv text long enough to detect language properly here")
+    assert cv.full_name == "Repaired"
+    assert calls == ["extractor", "judge"]
+
+
 def _seed_app(db_factory, payload: dict) -> int:
     with db_factory() as db:
         row = Application(job_id=1, candidate_ref="a@b.c", state="RECEIVED", payload=payload)
@@ -114,6 +171,10 @@ def test_parse_node_stores_cv_and_advances(db_factory, monkeypatch):
         row = db.get(Application, app_id)
         assert row.state == "PARSED"
         assert row.payload["cv"]["full_name"] == "Jane Doe"
+        # Traceability (spec §A3): raw_text + parser_version retained.
+        assert row.payload["raw_text"] == "Jane Doe, Python developer"
+        assert row.payload["parser_version"] == parser_mod.PARSER_VERSION
+        assert "language" in row.payload
 
 
 def test_parse_node_routes_to_needs_attention_without_cv(db_factory):

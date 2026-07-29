@@ -1,4 +1,4 @@
-"""A1 — CV parser.
+"""A3 — CV ingestion & parsing.
 
 Turns a raw CV (PDF / DOCX / plain text) into a validated `CVData` record.
 
@@ -19,11 +19,16 @@ field faithfully.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+import re
+from datetime import UTC, datetime
 
 from app.gateway import llm_call
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
-PROMPT_VERSION = "cv_parse@v1"
+PROMPT_VERSION = "cv_parse@v2"
+# Bumped when extraction/post-processing logic changes; stored with each parse
+# so a persisted profile is reproducible from (model, prompt_version, parser).
+PARSER_VERSION = "a3-parser@v2"
 
 
 def _coerce_str(v: object) -> object:
@@ -70,16 +75,20 @@ class CVData(BaseModel):
     email: str = Field(default="")
     phone: str = Field(default="")
     location: str = Field(default="")
+    links: list[str] = Field(default_factory=list, description="Profile/portfolio URLs")
     summary: str = Field(default="", description="Candidate's professional summary")
     skills: list[str] = Field(default_factory=list)
     languages: list[str] = Field(default_factory=list)
+    certifications: list[str] = Field(default_factory=list)
     years_experience: float | None = Field(
         default=None, description="Total years of professional experience, best estimate"
     )
+    # Document language (ISO 639-1), detected in code — not the spoken `languages`.
+    language: str = Field(default="")
     experiences: list[Experience] = Field(default_factory=list)
     education: list[Education] = Field(default_factory=list)
 
-    @field_validator("skills", "languages", mode="before")
+    @field_validator("skills", "languages", "certifications", "links", mode="before")
     @classmethod
     def _flatten_str_list(cls, v: object) -> object:
         """Coerce list-of-objects to list-of-strings.
@@ -145,23 +154,96 @@ _SYSTEM_PROMPT = (
     "You are a precise CV parser. Extract the candidate's details from the CV text "
     "into the requested JSON schema. Rules:\n"
     "- full_name: the candidate's name, usually the most prominent line at the top.\n"
+    "- links: any profile/portfolio URLs (LinkedIn, GitHub, personal site).\n"
     "- skills: aggregate ALL technologies, tools, frameworks and languages mentioned "
     "anywhere in the CV — including tech stacks listed inside project or experience "
     "entries — deduplicated. Do not require a dedicated 'Skills' section.\n"
+    "- certifications: professional certifications / licences, if any.\n"
     "- experiences: include EVERY job/role listed, each with title, company, start, "
     "end and a one-line summary.\n"
     "- education: include EVERY qualification, with degree, institution and year.\n"
-    "- years_experience: total years of professional experience. Use the number if "
-    "the CV states it, otherwise estimate from the job date ranges; null only if "
-    "there is no basis at all.\n"
+    "- years_experience: leave your best estimate; it is recomputed in code from the "
+    "experience date ranges.\n"
     "- Copy values verbatim from the CV; never invent data. Leave a field empty "
     "(\"\" or []) only when the CV genuinely does not contain it.\n"
     "Respond with a single JSON object and nothing else."
 )
 
 
+def detect_language(text: str) -> str:
+    """ISO 639-1 language of the CV text (e.g. 'fr'/'en'/'ar'), '' if undetectable."""
+    sample = text.strip()
+    if len(sample) < 20:
+        return ""
+    try:
+        from langdetect import DetectorFactory, detect
+
+        DetectorFactory.seed = 0  # deterministic
+        return detect(sample)
+    except Exception:  # noqa: BLE001 - langdetect raises on empty/ambiguous input
+        return ""
+
+
+_YEAR_RE = re.compile(r"(19|20)\d{2}")
+_PRESENT_RE = re.compile(r"present|current|now|actuel|aujourd|présent", re.IGNORECASE)
+
+
+def _year_of(value: str, *, end: bool = False) -> int | None:
+    """Best-effort 4-digit year from a free-text date; 'present' -> current year."""
+    if not value:
+        return None
+    if end and _PRESENT_RE.search(value):
+        return datetime.now(UTC).year
+    m = _YEAR_RE.search(value)
+    return int(m.group(0)) if m else None
+
+
+def compute_years_experience(experiences: list[Experience]) -> float | None:
+    """Total professional experience in years, computed in code (spec §A3).
+
+    Sums each role's (end_year - start_year); a role with an end before its start
+    is clamped to 0 (date-consistency guard). Returns None when no role has a
+    parseable date range.
+    """
+    total = 0.0
+    seen = False
+    for exp in experiences:
+        start = _year_of(exp.start)
+        end = _year_of(exp.end, end=True)
+        if start is None:
+            continue
+        seen = True
+        if end is None:
+            end = datetime.now(UTC).year
+        total += max(0, end - start)
+    return round(total, 1) if seen else None
+
+
+def _postprocess(cv: CVData, raw_text: str) -> CVData:
+    """Deterministic post-processing: language + code-computed experience."""
+    computed = compute_years_experience(cv.experiences)
+    return cv.model_copy(update={
+        "language": detect_language(raw_text),
+        "years_experience": computed if computed is not None else cv.years_experience,
+    })
+
+
+_REPAIR_PROMPT = (
+    "The following text is a failed attempt to produce a CV JSON object. Fix it so "
+    "it is a single valid JSON object matching the required schema (identity, "
+    "contact, links, summary, skills, languages, certifications, experiences, "
+    "education). Keep all real data; drop anything that does not fit. Respond with "
+    "the corrected JSON object and nothing else."
+)
+
+
 def parse_cv(raw_text: str, *, user_id: str | None = None) -> CVData:
-    """Extract structured `CVData` from already-extracted CV text via the gateway."""
+    """Extract structured `CVData` from already-extracted CV text via the gateway.
+
+    Fast path uses the 8B `extractor`. On schema drift a single repair pass runs
+    through the stronger `judge` model (spec §A3 "70B repair pass") before giving
+    up. Language and total experience are then computed in code.
+    """
     if not raw_text.strip():
         raise CVParseError("Empty CV text passed to parse_cv")
 
@@ -174,10 +256,28 @@ def parse_cv(raw_text: str, *, user_id: str | None = None) -> CVData:
             ],
             schema=CVData,
             user_id=user_id,
-            metadata={"agent": "A1", "prompt_version": PROMPT_VERSION},
+            metadata={"agent": "A3", "prompt_version": PROMPT_VERSION, "stage": "extract"},
+        )
+    except ValidationError:
+        result = _repair_parse(raw_text, user_id=user_id)
+
+    return _postprocess(result, raw_text)
+
+
+def _repair_parse(raw_text: str, *, user_id: str | None = None) -> CVData:
+    """Second-chance extraction through the stronger judge model."""
+    try:
+        return llm_call(
+            profile="judge",
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT + "\n\n" + _REPAIR_PROMPT},
+                {"role": "user", "content": raw_text},
+            ],
+            schema=CVData,
+            user_id=user_id,
+            metadata={"agent": "A3", "prompt_version": PROMPT_VERSION, "stage": "repair"},
         )
     except ValidationError as exc:
-        # Schema drift from the model is a parse failure, not a crash — the node
-        # routes the application to NEEDS_ATTENTION rather than retrying forever.
+        # Both passes failed — a parse failure, not a crash. The node routes the
+        # application to NEEDS_ATTENTION rather than retrying forever.
         raise CVParseError(f"LLM output did not match CVData schema: {exc}") from exc
-    return result

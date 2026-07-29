@@ -24,7 +24,13 @@ from langgraph.types import interrupt
 from sqlalchemy.orm import Session
 
 from orchestrator.agents.masking import mask_cv
-from orchestrator.agents.parser import CVData, CVParseError, extract_text, parse_cv
+from orchestrator.agents.parser import (
+    PARSER_VERSION,
+    CVData,
+    CVParseError,
+    extract_text,
+    parse_cv,
+)
 from orchestrator.agents.prescreen import (
     CONSENT_PROMPT,
     PrescreenError,
@@ -116,14 +122,15 @@ def _resolve_cv_text(payload: dict[str, Any]) -> str:
 
 
 def parse_node(db: Session, state: NodeState) -> NodeState:
-    """A1 — extract structured CV data. Routes to NEEDS_ATTENTION on failure."""
+    """A3 — extract structured CV data. Routes to NEEDS_ATTENTION on failure."""
     app_row = db.get(Application, state["application_id"])
     payload = dict(app_row.payload) if app_row is not None else {}
 
     def _work() -> dict[str, Any]:
         raw_text = _resolve_cv_text(payload)
         cv = parse_cv(raw_text, user_id=str(state["application_id"]))
-        return cv.model_dump()
+        # Retain traceability to the source text (spec §A3 I/O contract).
+        return {"cv": cv.model_dump(), "raw_text": raw_text}
 
     try:
         parsed = with_ledger(
@@ -141,9 +148,16 @@ def parse_node(db: Session, state: NodeState) -> NodeState:
         )
         return _advance(db, state, State.NEEDS_ATTENTION, "parse_failed")
 
+    cv_data = parsed["cv"]
     if app_row is not None:
-        app_row.payload = {**app_row.payload, "cv": parsed}
-    state.setdefault("scratch", {})["cv"] = parsed
+        app_row.payload = {
+            **app_row.payload,
+            "cv": cv_data,
+            "raw_text": parsed["raw_text"],
+            "parser_version": PARSER_VERSION,
+            "language": cv_data.get("language", ""),
+        }
+    state.setdefault("scratch", {})["cv"] = cv_data
     return _advance(db, state, State.PARSED, "parse")
 
 
