@@ -93,6 +93,34 @@ def test_extract_pages_plaintext_single_page():
     assert extract_pages("cv.txt", b"line1\nline2") == ["line1\nline2"]
 
 
+def test_ocr_fallback_disabled_by_default(monkeypatch):
+    from orchestrator.agents.parser import _apply_ocr_fallback
+
+    monkeypatch.delenv("OCR_ENABLED", raising=False)
+    pages = ["", "short"]  # both thin
+    called = []
+    out = _apply_ocr_fallback(pages, lambda i: called.append(i) or "OCR")
+    assert out == pages and called == []  # provider never invoked
+
+
+def test_ocr_fallback_replaces_thin_pages_when_enabled(monkeypatch):
+    from orchestrator.agents.parser import _apply_ocr_fallback
+
+    monkeypatch.setenv("OCR_ENABLED", "1")
+    thick = "x" * 300
+    pages = [thick, "scanned-thin-page"]
+    out = _apply_ocr_fallback(pages, lambda i: f"OCR{i}")
+    assert out[0] == thick          # thick page left as-is
+    assert out[1] == "OCR1"          # thin page replaced by OCR
+
+
+def test_needs_ocr_threshold():
+    from orchestrator.agents.parser import _needs_ocr
+
+    assert _needs_ocr("x" * 199) is True
+    assert _needs_ocr("x" * 200) is False
+
+
 def test_attach_sources_tags_page_and_snippet():
     from orchestrator.agents.parser import CVData, Experience, attach_sources
 

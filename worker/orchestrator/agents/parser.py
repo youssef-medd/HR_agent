@@ -19,6 +19,7 @@ field faithfully.
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import UTC, datetime
 
@@ -123,11 +124,60 @@ class CVParseError(RuntimeError):
     """Raised when no text can be extracted from the source document."""
 
 
+# OCR fallback (spec §A3): when a PDF page's text layer is thinner than this,
+# the page is likely a scan and is re-read with Tesseract. Off unless
+# OCR_ENABLED is truthy and pytesseract + the tesseract binary are installed.
+OCR_MIN_CHARS = 200
+
+
+def _ocr_enabled() -> bool:
+    return os.environ.get("OCR_ENABLED", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _needs_ocr(page_text: str) -> bool:
+    return len(page_text.strip()) < OCR_MIN_CHARS
+
+
+def _ocr_langs() -> str:
+    return os.environ.get("OCR_LANGS", "fra+eng+ara")
+
+
+def _apply_ocr_fallback(pages: list[str], ocr_provider) -> list[str]:
+    """Replace thin (likely-scanned) pages with OCR text when enabled.
+
+    `ocr_provider(index) -> str` renders + OCRs page `index`. Pure/​testable:
+    the fitz rendering is injected, not imported here.
+    """
+    if not _ocr_enabled() or ocr_provider is None:
+        return pages
+    out: list[str] = []
+    for i, text in enumerate(pages):
+        if _needs_ocr(text):
+            try:
+                ocr_text = ocr_provider(i)
+            except Exception:  # noqa: BLE001 - OCR is best-effort, never fatal
+                ocr_text = ""
+            out.append(ocr_text or text)
+        else:
+            out.append(text)
+    return out
+
+
+def _ocr_pdf_page(doc, index: int) -> str:
+    """Render one PDF page to an image and OCR it (lazy, optional deps)."""
+    import pytesseract  # optional; only present where OCR is provisioned
+
+    page = doc[index]
+    pix = page.get_pixmap(dpi=200)
+    return pytesseract.image_to_string(pix.tobytes("png"), lang=_ocr_langs())
+
+
 def extract_pages(filename: str, data: bytes) -> list[str]:
     """Extract text per page, dispatching on extension.
 
     PDF yields one entry per page (for source-page traceability); DOCX and
-    plain text yield a single entry. Lazy-imports the heavy parsers.
+    plain text yield a single entry. Thin PDF pages fall back to OCR when
+    OCR_ENABLED is set. Lazy-imports the heavy parsers.
     """
     name = filename.lower()
 
@@ -135,7 +185,8 @@ def extract_pages(filename: str, data: bytes) -> list[str]:
         import fitz  # PyMuPDF
 
         with fitz.open(stream=data, filetype="pdf") as doc:
-            return [page.get_text() for page in doc]
+            pages = [page.get_text() for page in doc]
+            return _apply_ocr_fallback(pages, lambda i: _ocr_pdf_page(doc, i))
     elif name.endswith(".docx"):
         import io
 
