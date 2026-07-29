@@ -16,6 +16,7 @@ from typing import Any
 from app.models.application import Application
 from app.models.job import Job
 from app.models.needs_attention import NeedsAttention
+from app.rgpd import purge_expired
 from celery.utils.log import get_task_logger
 from langgraph.types import Command
 from sqlalchemy import create_engine, select
@@ -29,9 +30,13 @@ from orchestrator.email_intake import (
     fetch_new_cv_attachments,
     imap_configured,
 )
-from app.rgpd import purge_expired
+from orchestrator.emails import portal_link
 from orchestrator.graph import build_graph
-from orchestrator.side_effects import _send_interview_reminder_impl
+from orchestrator.side_effects import (
+    _send_interview_reminder_impl,
+    _send_prescreen_invite_impl,
+    _send_whatsapp_impl,
+)
 
 logger = get_task_logger(__name__)
 
@@ -201,6 +206,80 @@ def _send_due_reminders(db, *, now: datetime | None = None) -> list[int]:
         db.commit()
         reminded.append(row.id)
     return reminded
+
+
+def _prescreen_last_activity(row: Application) -> datetime:
+    """Best proxy for the last candidate turn: the row's updated_at (bumped only
+    when a turn is processed while the graph is otherwise paused)."""
+    ts = row.updated_at
+    if ts is None:
+        return datetime.now(UTC)
+    return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+
+
+def _process_stale_prescreens(db, *, now: datetime | None = None) -> dict[str, list[int]]:
+    """A5 timeout policy: after TIMEOUT_HOURS idle send one reminder; after a
+    further TIMEOUT_HOURS with no reply, mark PRESCREEN_INCOMPLETE for the
+    recruiter to decide. Testable — inject `now`."""
+    now = now or datetime.now(UTC)
+    hours = float(os.environ.get("PRESCREEN_TIMEOUT_HOURS", "48"))
+    reminded: list[int] = []
+    incomplete: list[int] = []
+    rows = db.scalars(select(Application).where(Application.state == "PRESCREENING")).all()
+    for row in rows:
+        idle_h = (now - _prescreen_last_activity(row)).total_seconds() / 3600.0
+        if idle_h < hours:
+            continue
+        block = dict((row.payload or {}).get("prescreen") or {})
+        phone = (row.payload or {}).get("phone") or (row.payload or {}).get("cv", {}).get("phone")
+
+        if not block.get("reminder_at"):
+            if phone:
+                _send_whatsapp_impl(
+                    db, row.id, phone,
+                    "Just a reminder to finish your quick pre-screening — reply here to continue.",
+                )
+            elif "@" in (row.candidate_ref or ""):
+                _send_prescreen_invite_impl(
+                    db, row.id, row.candidate_ref, portal_link(row.candidate_ref, row.id)
+                )
+            block["reminder_at"] = now.isoformat()
+            row.payload = {**(row.payload or {}), "prescreen": block}
+            db.commit()
+            reminded.append(row.id)
+            continue
+
+        # Reminder already sent — is the extra grace window also elapsed?
+        try:
+            reminded_at = datetime.fromisoformat(block["reminder_at"])
+        except (ValueError, TypeError):
+            reminded_at = _prescreen_last_activity(row)
+        if reminded_at.tzinfo is None:
+            reminded_at = reminded_at.replace(tzinfo=UTC)
+        if (now - reminded_at).total_seconds() / 3600.0 < hours:
+            continue
+
+        block["status"] = "incomplete"
+        row.payload = {**(row.payload or {}), "prescreen": block}
+        row.state = "NEEDS_ATTENTION"
+        db.add(NeedsAttention(
+            application_id=row.id, reason="prescreen_incomplete",
+            context={"idle_hours": round(idle_h, 1)},
+        ))
+        db.commit()
+        incomplete.append(row.id)
+    return {"reminded": reminded, "incomplete": incomplete}
+
+
+@celery.task(name="orchestrator.process_stale_prescreens")
+def process_stale_prescreens() -> dict[str, Any]:
+    """A5 — beat job: nudge idle pre-screens, then mark them incomplete."""
+    with _db_factory() as db:
+        result = _process_stale_prescreens(db)
+    if result["reminded"] or result["incomplete"]:
+        logger.info("Stale pre-screens: reminded %s, incomplete %s",
+                    result["reminded"], result["incomplete"])
+    return result
 
 
 @celery.task(name="orchestrator.send_interview_reminders")

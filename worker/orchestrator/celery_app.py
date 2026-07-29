@@ -49,4 +49,9 @@ celery.conf.beat_schedule = {
         "task": "orchestrator.purge_expired_applications",
         "schedule": float(os.environ.get("RETENTION_POLL_SECONDS", "86400")),
     },
+    # A5 — nudge idle pre-screens (48h), then mark them incomplete.
+    "process-stale-prescreens": {
+        "task": "orchestrator.process_stale_prescreens",
+        "schedule": float(os.environ.get("PRESCREEN_POLL_SECONDS", "3600")),
+    },
 }
