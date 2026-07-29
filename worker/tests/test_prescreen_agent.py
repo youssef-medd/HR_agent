@@ -92,3 +92,55 @@ def test_interpret_consent_wraps_validation_error(monkeypatch):
     monkeypatch.setattr(prescreen_mod, "llm_call", boom)
     with pytest.raises(PrescreenError):
         interpret_consent("???")
+
+
+def test_generate_questions_passes_language(monkeypatch):
+    from orchestrator.agents.prescreen import QuestionSet, generate_questions
+
+    captured = {}
+
+    def cap(**kw):
+        captured["content"] = kw["messages"][1]["content"]
+        return QuestionSet(questions=["Q1?"])
+
+    monkeypatch.setattr(prescreen_mod, "llm_call", cap)
+    generate_questions(title="Dev", job_spec={"spec": {"must_have": ["Python"]}}, lang="fr")
+    assert "French" in captured["content"]
+
+
+def test_summarize_prescreen_returns_summary(monkeypatch):
+    from orchestrator.agents.prescreen import (
+        PrescreenFlags,
+        PrescreenSlots,
+        PrescreenSummary,
+        summarize_prescreen,
+    )
+
+    captured = {}
+
+    def cap(**kw):
+        captured.update(profile=kw["profile"], meta=kw["metadata"])
+        return PrescreenSummary(
+            recap="ok",
+            slots=PrescreenSlots(salary_expectation="50k"),
+            flags=PrescreenFlags(contradictions=["says 5y, CV shows 2y"]),
+        )
+
+    monkeypatch.setattr(prescreen_mod, "llm_call", cap)
+    out = summarize_prescreen(
+        title="Dev", cv={"summary": "eng"}, answers=[{"q": "salary?", "a": "50k"}], lang="en"
+    )
+    assert out.recap == "ok" and out.slots.salary_expectation == "50k"
+    assert out.flags.contradictions == ["says 5y, CV shows 2y"]
+    assert captured["profile"] == "chat" and captured["meta"]["agent"] == "A5"
+
+
+def test_summarize_prescreen_never_blocks(monkeypatch):
+    from orchestrator.agents.prescreen import summarize_prescreen
+
+    def boom(**_):
+        raise RuntimeError("llm down")
+
+    monkeypatch.setattr(prescreen_mod, "llm_call", boom)
+    out = summarize_prescreen(title="X", cv={}, answers=[])
+    assert out.recap == "" and out.slots.availability == ""  # empty, no raise

@@ -40,6 +40,7 @@ from orchestrator.agents.prescreen import (
     interpret_answer,
     interpret_consent,
     screening_questions,
+    summarize_prescreen,
 )
 from orchestrator.agents.scheduler import (
     SchedulerError,
@@ -404,10 +405,13 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
 
     # Generate job-specific questions from A1's JobSpec on first entry, persist
     # them so replays reuse the exact same set (deterministic interrupt sequence).
+    lang = payload.get("language") or ""
     if not payload.get("screening_questions") and app_row is not None:
         job = db.get(Job, app_row.job_id)
         if job is not None and job.spec:
-            generated = generate_questions(title=job.title, job_spec=job.spec, user_id=str(app_id))
+            generated = generate_questions(
+                title=job.title, job_spec=job.spec, lang=lang, user_id=str(app_id)
+            )
             if generated:
                 payload["screening_questions"] = generated
                 _save_payload_key(db, app_id, "screening_questions", generated)
@@ -476,18 +480,32 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
     _save_prescreen(db, app_id, block)
 
     # --- Question turns -----------------------------------------------------
+    # Slot-filling with a single clarification re-ask on an unclear reply, and a
+    # polite hand-off flag on sensitive/off-script replies (never debate). Both
+    # branches are pure functions of the deterministic reply interpretation, so
+    # the interrupt sequence still replays identically.
     answers: list[dict[str, Any]] = []
-    for i, question in enumerate(questions):
-        _deliver(f"prescreen_q{i}", question)
+    flags: list[str] = []
+
+    def _ask(step: str, prompt: str) -> str:
+        _deliver(step, prompt)
         reply = _candidate_message(
-            interrupt({
-                "kind": "await_candidate_reply", "stage": "question",
-                "idx": i, "application_id": app_id,
-            })
+            interrupt({"kind": "await_candidate_reply", "stage": "question", "application_id": app_id})
         )
         transcript.append({"role": "user", "text": reply})
+        return reply
+
+    for i, question in enumerate(questions):
+        reply = _ask(f"prescreen_q{i}", question)
         try:
             interp = interpret_answer(question, reply, user_id=str(app_id))
+            # One clarification re-ask when the reply does not answer the question.
+            if not interp.answered and not interp.sensitive:
+                reply2 = _ask(
+                    f"prescreen_q{i}_clarify",
+                    "Sorry, I didn't quite catch that — could you answer briefly?",
+                )
+                interp = interpret_answer(question, reply2, user_id=str(app_id))
         except PrescreenError as exc:
             block["answers"] = answers
             block["status"] = "error"
@@ -499,12 +517,40 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
             ))
             return _advance(db, state, State.NEEDS_ATTENTION, "prescreen_answer_failed")
 
+        if interp.sensitive:
+            transcript.append({"role": "assistant", "text":
+                "Thanks for flagging that — I'll pass this to a member of our team who'll follow up."})
+            flags.append(f"handoff:{question}")
+        elif not interp.answered:
+            flags.append(f"unclear:{question}")
+
         answered_at = prior_answers[i]["at"] if i < len(prior_answers) else datetime.now(UTC).isoformat()
         answers.append({"q": question, "a": interp.answer, "at": answered_at})
         block["answers"] = answers
         block["idx"] = i + 1
         block["transcript"] = list(transcript)
         _save_prescreen(db, app_id, block)
+
+    # --- Summary + structured slots + flags (spec §A5 summarizer) -----------
+    job_row = db.get(Job, app_row.job_id) if app_row is not None else None
+    summary = summarize_prescreen(
+        title=(job_row.title if job_row is not None else ""),
+        cv=payload.get("cv") or {},
+        answers=answers,
+        lang=lang,
+        user_id=str(app_id),
+    )
+    slots = summary.slots.model_dump()
+    block["summary"] = summary.recap
+    block["slots"] = slots
+    block["flags"] = {
+        "contradictions": summary.flags.contradictions,
+        "red_flags": summary.flags.red_flags,
+        "great_signals": summary.flags.great_signals,
+        "conversation": flags,
+    }
+    # Merge the extracted slots into the application profile.
+    _save_payload_key(db, app_id, "prescreen_slots", slots)
 
     transcript.append({"role": "assistant", "text": "Thanks — that's everything. Our team will be in touch."})
     block["transcript"] = list(transcript)

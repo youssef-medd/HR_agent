@@ -10,9 +10,9 @@ it, yet the ledger keeps `_SENT` at one entry per step.
 
 from __future__ import annotations
 
+from app.models.application import Application
 from langgraph.types import Command
 
-from app.models.application import Application
 from orchestrator.agents.parser import CVData
 from orchestrator.agents.prescreen import AnswerInterpretation, ConsentInterpretation
 from orchestrator.agents.scorer import ScoreResult
@@ -50,12 +50,15 @@ def _seed(db_factory, **payload_over) -> int:
 
 def _stub_pipeline(monkeypatch, *, recommendation="shortlist"):
     from orchestrator import nodes
+    from orchestrator.agents.prescreen import PrescreenSummary
 
     monkeypatch.setattr(nodes, "parse_cv", lambda text, **_: CVData(full_name="Cand", skills=["Python"]))
     monkeypatch.setattr(
         nodes, "score_candidate",
         lambda masked, jd, **_: ScoreResult(overall=80, recommendation=recommendation),
     )
+    # A5 summariser is offline in tests (no gateway call).
+    monkeypatch.setattr(nodes, "summarize_prescreen", lambda **_: PrescreenSummary())
 
 
 def test_prescreen_happy_path(db_factory, monkeypatch):
@@ -166,3 +169,100 @@ def test_prescreen_web_channel_uses_transcript_not_whatsapp(db_factory, monkeypa
     invites = [s for s in _sent_log_snapshot() if s["kind"] == "prescreen_invite"]
     assert len(invites) == 1
     assert "/portal?email=" in invites[0]["link"] and f"ref={app_id}" in invites[0]["link"]
+
+
+def _smart_interp(q, msg, **_):
+    if "lawyer" in msg:
+        return AnswerInterpretation(answer=msg, answered=True, sensitive=True)
+    if msg == "huh":
+        return AnswerInterpretation(answer="", answered=False)
+    return AnswerInterpretation(answer=msg, answered=True)
+
+
+def test_prescreen_reasks_once_on_unclear_reply(db_factory, monkeypatch):
+    from orchestrator import nodes
+
+    _stub_pipeline(monkeypatch)
+    monkeypatch.setattr(nodes, "interpret_consent", lambda msg, **_: ConsentInterpretation(consent=True))
+    monkeypatch.setattr(nodes, "interpret_answer", _smart_interp)
+
+    _sent_log_reset()
+    graph = build_graph(db_factory, memory_saver())
+    app_id = _seed(db_factory)  # web channel
+    config = {"configurable": {"thread_id": str(app_id)}}
+
+    graph.invoke({"application_id": app_id, "stage": "RECEIVED", "attempt": 1}, config=config)
+    graph.invoke(Command(resume={"candidate_message": "yes"}), config=config)      # consent
+    graph.invoke(Command(resume={"candidate_message": "huh"}), config=config)      # q0 unclear
+    graph.invoke(Command(resume={"candidate_message": "6 years"}), config=config)  # q0 clarify
+    result = graph.invoke(Command(resume={"candidate_message": "1 month"}), config=config)  # q1
+
+    assert result["stage"] == "PRESCREENED"
+    with db_factory() as db:
+        block = db.get(Application, app_id).payload["prescreen"]
+        texts = [m["text"] for m in block["transcript"]]
+        assert any("didn't quite catch" in t for t in texts)  # one clarification re-ask
+        assert [a["a"] for a in block["answers"]] == ["6 years", "1 month"]
+
+
+def test_prescreen_sensitive_reply_hands_off(db_factory, monkeypatch):
+    from orchestrator import nodes
+
+    _stub_pipeline(monkeypatch)
+    monkeypatch.setattr(nodes, "interpret_consent", lambda msg, **_: ConsentInterpretation(consent=True))
+    monkeypatch.setattr(nodes, "interpret_answer", _smart_interp)
+
+    _sent_log_reset()
+    graph = build_graph(db_factory, memory_saver())
+    app_id = _seed(db_factory)
+    config = {"configurable": {"thread_id": str(app_id)}}
+
+    graph.invoke({"application_id": app_id, "stage": "RECEIVED", "attempt": 1}, config=config)
+    graph.invoke(Command(resume={"candidate_message": "yes"}), config=config)
+    graph.invoke(Command(resume={"candidate_message": "call my lawyer"}), config=config)  # sensitive
+    result = graph.invoke(Command(resume={"candidate_message": "1 month"}), config=config)
+
+    assert result["stage"] == "PRESCREENED"
+    with db_factory() as db:
+        block = db.get(Application, app_id).payload["prescreen"]
+        assert any("pass this to a member" in m["text"] for m in block["transcript"])
+        assert any(f.startswith("handoff:") for f in block["flags"]["conversation"])
+
+
+def test_prescreen_stores_summary_and_slots(db_factory, monkeypatch):
+    from orchestrator import nodes
+    from orchestrator.agents.prescreen import PrescreenFlags, PrescreenSlots, PrescreenSummary
+
+    _stub_pipeline(monkeypatch)
+    monkeypatch.setattr(nodes, "interpret_consent", lambda msg, **_: ConsentInterpretation(consent=True))
+    monkeypatch.setattr(
+        nodes, "interpret_answer",
+        lambda q, msg, **_: AnswerInterpretation(answer=msg, answered=True),
+    )
+    monkeypatch.setattr(
+        nodes, "summarize_prescreen",
+        lambda **_: PrescreenSummary(
+            recap="Solid backend candidate.",
+            slots=PrescreenSlots(availability="immediate", salary_expectation="50k"),
+            flags=PrescreenFlags(great_signals=["ships fast"]),
+        ),
+    )
+
+    _sent_log_reset()
+    graph = build_graph(db_factory, memory_saver())
+    app_id = _seed(db_factory)
+    config = {"configurable": {"thread_id": str(app_id)}}
+
+    graph.invoke({"application_id": app_id, "stage": "RECEIVED", "attempt": 1}, config=config)
+    graph.invoke(Command(resume={"candidate_message": "yes"}), config=config)
+    graph.invoke(Command(resume={"candidate_message": "6 years"}), config=config)
+    graph.invoke(Command(resume={"candidate_message": "1 month"}), config=config)
+
+    with db_factory() as db:
+        payload = db.get(Application, app_id).payload
+        block = payload["prescreen"]
+        assert block["summary"] == "Solid backend candidate."
+        assert block["slots"]["availability"] == "immediate"
+        assert block["flags"]["great_signals"] == ["ships fast"]
+        # slots merged into the profile payload
+        assert payload["prescreen_slots"]["salary_expectation"] == "50k"

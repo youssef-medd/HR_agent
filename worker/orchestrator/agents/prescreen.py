@@ -17,14 +17,21 @@ each inbound free-text reply, through the gateway's `chat` profile in JSON mode
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, ValidationError
-
 import json
 
 from app.gateway import llm_call
+from pydantic import BaseModel, Field, ValidationError
 
-PROMPT_VERSION = "prescreen@v1"
-QUESTIONS_PROMPT_VERSION = "prescreen_questions@v1"
+PROMPT_VERSION = "prescreen@v2"
+QUESTIONS_PROMPT_VERSION = "prescreen_questions@v2"
+SUMMARY_PROMPT_VERSION = "prescreen_summary@v1"
+
+# Candidate correspondence languages (spec §A5: FR/EN/AR).
+_LANG_NAMES = {"en": "English", "fr": "French", "ar": "Arabic"}
+
+
+def _lang_name(lang: str | None) -> str:
+    return _LANG_NAMES.get((lang or "en").strip().lower()[:2], "English")
 
 # Baseline questions when the application payload carries no override. Kept short
 # and closed enough that a one-line WhatsApp reply answers each.
@@ -49,6 +56,31 @@ class ConsentInterpretation(BaseModel):
 class AnswerInterpretation(BaseModel):
     answer: str = Field(default="", description="The candidate's answer, normalised to one line")
     answered: bool = Field(default=True, description="False if the reply does not answer the question")
+    sensitive: bool = Field(
+        default=False,
+        description="True if the reply raises a sensitive/off-script topic needing a human",
+    )
+
+
+class PrescreenSlots(BaseModel):
+    """Structured fields extracted from the conversation, merged into the profile."""
+
+    availability: str = Field(default="")
+    notice_period: str = Field(default="")
+    salary_expectation: str = Field(default="")
+    mobility: str = Field(default="")
+
+
+class PrescreenFlags(BaseModel):
+    contradictions: list[str] = Field(default_factory=list)  # vs the CV — flagged, not judged
+    red_flags: list[str] = Field(default_factory=list)
+    great_signals: list[str] = Field(default_factory=list)
+
+
+class PrescreenSummary(BaseModel):
+    recap: str = Field(default="", description="<= 5 line recap for the recruiter")
+    slots: PrescreenSlots = Field(default_factory=PrescreenSlots)
+    flags: PrescreenFlags = Field(default_factory=PrescreenFlags)
 
 
 class PrescreenError(RuntimeError):
@@ -84,19 +116,23 @@ def generate_questions(
     *,
     title: str,
     job_spec: dict | None,
+    lang: str | None = None,
     user_id: str | None = None,
 ) -> list[str]:
     """Generate job-specific screening questions from A1's JobSpec.
 
-    Falls back to `DEFAULT_QUESTIONS` when there is no structured spec or the
-    model output can't be validated — pre-screening must never be blocked by
-    the generator.
+    Written in the candidate's language (spec §A5: FR/EN/AR). Falls back to
+    `DEFAULT_QUESTIONS` when there is no structured spec or the model output
+    can't be validated — pre-screening must never be blocked by the generator.
     """
     spec = (job_spec or {}).get("spec") if job_spec else None
     if not spec:
         return list(DEFAULT_QUESTIONS)
 
-    content = f"JOB TITLE: {title}\n\nJOB SPEC:\n{json.dumps(spec, ensure_ascii=False)}"
+    content = (
+        f"JOB TITLE: {title}\n\nJOB SPEC:\n{json.dumps(spec, ensure_ascii=False)}\n\n"
+        f"Write the questions in {_lang_name(lang)}."
+    )
     try:
         result: QuestionSet = llm_call(
             profile="chat",
@@ -127,9 +163,68 @@ _ANSWER_SYSTEM = (
     "You extract a candidate's answer to a single pre-screening question from "
     "their raw reply. Respond with a single JSON object using EXACTLY these keys: "
     "answer (string — the answer normalised to one concise line), answered "
-    "(boolean — false if the reply does not actually answer the question). "
-    "Do not invent information not present in the reply. Nothing else."
+    "(boolean — false if the reply is empty, evasive, or does not actually answer "
+    "the question), sensitive (boolean — true if the reply raises an off-script or "
+    "sensitive topic — legal threat, health/disability, harassment, a question only "
+    "a human recruiter should handle). Do not invent information not present in the "
+    "reply. Nothing else."
 )
+
+_SUMMARY_SYSTEM = (
+    "You summarise a completed candidate pre-screening for a recruiter. You are "
+    "given the job title, the candidate's CV profile, and the question/answer "
+    "pairs. Produce a single JSON object with EXACTLY these keys:\n"
+    "- recap: at most 5 short lines summarising the candidate's answers.\n"
+    "- slots: {availability, notice_period, salary_expectation, mobility} — the "
+    "value stated by the candidate for each, or empty string if not covered.\n"
+    "- flags: {contradictions, red_flags, great_signals} — arrays of short "
+    "strings. contradictions = statements that conflict with the CV (state the "
+    "conflict factually, do NOT judge). red_flags = concerns worth a human's "
+    "attention. great_signals = notably positive signals.\n"
+    "Base everything ONLY on the provided material; never invent. Write recap and "
+    "flags in {lang}. Nothing else."
+)
+
+
+def summarize_prescreen(
+    *,
+    title: str,
+    cv: dict,
+    answers: list[dict],
+    lang: str | None = None,
+    user_id: str | None = None,
+) -> PrescreenSummary:
+    """Summarise a finished pre-screen: 5-line recap + slots + flags.
+
+    Never blocks the pipeline — returns an empty summary on any failure.
+    """
+    qa = [{"q": a.get("q", ""), "a": a.get("a", "")} for a in answers]
+    cv_brief = {
+        "summary": cv.get("summary", ""),
+        "skills": cv.get("skills", []),
+        "years_experience": cv.get("years_experience"),
+        "experiences": [
+            {"title": e.get("title", ""), "summary": e.get("summary", "")}
+            for e in cv.get("experiences", [])
+        ],
+    }
+    content = (
+        f"JOB TITLE: {title}\n\nCANDIDATE CV:\n{json.dumps(cv_brief, ensure_ascii=False)}\n\n"
+        f"PRE-SCREENING Q&A:\n{json.dumps(qa, ensure_ascii=False)}"
+    )
+    try:
+        return llm_call(
+            profile="chat",
+            messages=[
+                {"role": "system", "content": _SUMMARY_SYSTEM.replace("{lang}", _lang_name(lang))},
+                {"role": "user", "content": content},
+            ],
+            schema=PrescreenSummary,
+            user_id=user_id,
+            metadata={"agent": "A5", "prompt_version": SUMMARY_PROMPT_VERSION},
+        )
+    except Exception:  # noqa: BLE001 — summary is best-effort, never blocks
+        return PrescreenSummary()
 
 
 def interpret_consent(message: str, *, user_id: str | None = None) -> ConsentInterpretation:
