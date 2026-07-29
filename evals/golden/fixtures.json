@@ -1,0 +1,80 @@
+{
+  "_comment": "Small synthetic golden set for the eval harness demo (make evals --stub). The real 30-CV corpus is provisioned per evals/golden/README.md and is NOT committed. recruiter_score: higher = better candidate. _jd_skills feeds the offline scorer.",
+  "items": [
+    {
+      "id": "cv-1",
+      "jd": "Backend engineer building Python PostgreSQL Docker REST APIs",
+      "recruiter_score": 5,
+      "cv": {
+        "_jd_skills": ["Python", "PostgreSQL", "Docker", "FastAPI", "backend", "REST", "API"],
+        "skills": ["Python", "PostgreSQL", "Docker", "FastAPI", "REST"],
+        "summary": "Backend engineer",
+        "experiences": [{"title": "Backend Engineer", "summary": "built Python PostgreSQL REST APIs with Docker"}]
+      }
+    },
+    {
+      "id": "cv-2",
+      "jd": "Backend engineer building Python PostgreSQL Docker REST APIs",
+      "recruiter_score": 4,
+      "cv": {
+        "_jd_skills": ["Python", "PostgreSQL", "Docker", "FastAPI", "backend", "REST", "API"],
+        "skills": ["Python", "PostgreSQL", "Flask"],
+        "summary": "Backend developer",
+        "experiences": [{"title": "Developer", "summary": "built Python backend APIs"}]
+      }
+    },
+    {
+      "id": "cv-3",
+      "jd": "Backend engineer building Python PostgreSQL Docker REST APIs",
+      "recruiter_score": 3,
+      "cv": {
+        "_jd_skills": ["Python", "PostgreSQL", "Docker", "FastAPI", "backend", "REST", "API"],
+        "skills": ["Python", "MySQL"],
+        "summary": "Software developer",
+        "experiences": [{"title": "Developer", "summary": "scripting and automation"}]
+      }
+    },
+    {
+      "id": "cv-4",
+      "jd": "Backend engineer building Python PostgreSQL Docker REST APIs",
+      "recruiter_score": 2,
+      "cv": {
+        "_jd_skills": ["Python", "PostgreSQL", "Docker", "FastAPI", "backend", "REST", "API"],
+        "skills": ["Java", "Spring"],
+        "summary": "Java engineer",
+        "experiences": [{"title": "Java Engineer", "summary": "enterprise Spring services"}]
+      }
+    },
+    {
+      "id": "cv-5",
+      "jd": "Backend engineer building Python PostgreSQL Docker REST APIs",
+      "recruiter_score": 1,
+      "cv": {
+        "_jd_skills": ["Python", "PostgreSQL", "Docker", "FastAPI", "backend", "REST", "API"],
+        "skills": ["Photoshop", "Illustrator"],
+        "summary": "Graphic designer",
+        "experiences": [{"title": "Designer", "summary": "brand posters and layouts"}]
+      }
+    }
+  ],
+  "bias_pairs": [
+    {
+      "id": "identity-swap-1",
+      "jd": "Backend engineer building Python PostgreSQL Docker REST APIs",
+      "a": {
+        "_jd_skills": ["Python", "PostgreSQL", "Docker", "backend", "API"],
+        "full_name": "Jane Doe", "location": "Tunis",
+        "skills": ["Python", "PostgreSQL", "Docker"],
+        "summary": "Backend engineer",
+        "experiences": [{"title": "Backend Engineer", "summary": "built REST APIs"}]
+      },
+      "b": {
+        "_jd_skills": ["Python", "PostgreSQL", "Docker", "backend", "API"],
+        "full_name": "John Smith", "location": "Berlin",
+        "skills": ["Python", "PostgreSQL", "Docker"],
+        "summary": "Backend engineer",
+        "experiences": [{"title": "Backend Engineer", "summary": "built REST APIs"}]
+      }
+    }
+  ]
+}

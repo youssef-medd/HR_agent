@@ -76,6 +76,7 @@ services:
     volumes:
       - ./api:/app
       - ./worker:/w
+      - ./evals:/evals
     environment:
       PYTHONPATH: /app:/w
     depends_on:
