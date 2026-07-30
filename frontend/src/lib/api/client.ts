@@ -238,14 +238,26 @@ export interface JobFunnel {
   title: string;
   applicants: number;
   shortlisted: number;
+  avg_score?: number | null;
+  score_buckets?: Record<string, number>;
+}
+
+export interface SourceConversion {
+  applied: number;
+  shortlisted: number;
+  hired: number;
+  shortlist_rate: number;
+  hire_rate: number;
 }
 
 export interface ReportOverview {
   total_applications: number;
   by_state: Record<string, number>;
   by_source: Record<string, number>;
+  source_conversion: Record<string, SourceConversion>;
   funnel: FunnelStage[];
   avg_score: number | null;
+  score_distribution: Record<string, number>;
   shortlist_rate: number;
   hire_rate: number;
   open_gates: number;

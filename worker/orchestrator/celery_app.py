@@ -54,4 +54,14 @@ celery.conf.beat_schedule = {
         "task": "orchestrator.process_stale_prescreens",
         "schedule": float(os.environ.get("PRESCREEN_POLL_SECONDS", "3600")),
     },
+    # A9 — nightly KPI aggregate snapshot (default 24h).
+    "snapshot-metrics": {
+        "task": "orchestrator.snapshot_metrics",
+        "schedule": float(os.environ.get("SNAPSHOT_POLL_SECONDS", "86400")),
+    },
+    # A9 — weekly KPI digest email to admins (default 7 days).
+    "weekly-admin-digest": {
+        "task": "orchestrator.weekly_admin_digest",
+        "schedule": float(os.environ.get("DIGEST_POLL_SECONDS", "604800")),
+    },
 }

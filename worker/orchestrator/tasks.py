@@ -30,7 +30,7 @@ from orchestrator.email_intake import (
     fetch_new_cv_attachments,
     imap_configured,
 )
-from orchestrator.emails import portal_link
+from orchestrator.emails import portal_link, send_email
 from orchestrator.graph import build_graph
 from orchestrator.side_effects import (
     _send_interview_reminder_impl,
@@ -301,3 +301,57 @@ def purge_expired_applications() -> dict[str, Any]:
     if purged:
         logger.info("Retention: anonymised %d expired application(s): %s", len(purged), purged)
     return {"purged": purged}
+
+
+def _digest_body(metrics: dict[str, Any]) -> str:
+    """Plain-text weekly KPI digest from an overview snapshot."""
+    funnel = " → ".join(f"{f['stage']} {f['reached']}" for f in metrics.get("funnel", []))
+    lines = [
+        "Welyne HR — weekly recruitment digest",
+        "",
+        f"Applications: {metrics.get('total_applications', 0)}",
+        f"Funnel: {funnel}",
+        f"Shortlist rate: {metrics.get('shortlist_rate', 0):.0%}   "
+        f"Hire rate: {metrics.get('hire_rate', 0):.0%}",
+        f"Avg score: {metrics.get('avg_score')}",
+        f"Open human-review gates: {metrics.get('open_gates', 0)}",
+    ]
+    return "\n".join(lines)
+
+
+@celery.task(name="orchestrator.snapshot_metrics")
+def snapshot_metrics() -> dict[str, Any]:
+    """A9 — nightly aggregation: persist a KPI snapshot for trend charts."""
+    from app.models.report_snapshot import ReportSnapshot
+    from app.routers.reports import compute_overview
+
+    with _db_factory() as db:
+        metrics = compute_overview(db).model_dump()
+        db.add(ReportSnapshot(metrics=metrics))
+        db.commit()
+    return {"snapshot": True, "total_applications": metrics.get("total_applications", 0)}
+
+
+def _send_admin_digest(db) -> list[str]:
+    """Email the weekly KPI digest to every admin. Returns the recipients."""
+    from app.models.user import User
+    from app.routers.reports import compute_overview
+
+    admins = db.scalars(select(User).where(User.role == "admin")).all()
+    recipients = [u.email for u in admins if u.email]
+    if not recipients:
+        return []
+    body = _digest_body(compute_overview(db).model_dump())
+    for email in recipients:
+        send_email(email, "Welyne HR — weekly digest", body)
+    return recipients
+
+
+@celery.task(name="orchestrator.weekly_admin_digest")
+def weekly_admin_digest() -> dict[str, Any]:
+    """A9 — weekly digest email to admins."""
+    with _db_factory() as db:
+        recipients = _send_admin_digest(db)
+    if recipients:
+        logger.info("Weekly digest sent to %s", recipients)
+    return {"recipients": recipients}

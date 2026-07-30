@@ -14,6 +14,7 @@ from app.models.idempotency_ledger import IdempotencyLedger
 from app.models.job import Job
 from app.models.message_log import MessageLog
 from app.models.needs_attention import NeedsAttention
+from app.models.report_snapshot import ReportSnapshot
 from app.models.user import User
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "Job",
     "MessageLog",
     "NeedsAttention",
+    "ReportSnapshot",
     "User",
 ]

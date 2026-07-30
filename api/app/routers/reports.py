@@ -15,7 +15,7 @@ from __future__ import annotations
 import csv
 import io
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import Response
@@ -59,18 +59,44 @@ class JobFunnel(BaseModel):
     title: str
     applicants: int
     shortlisted: int
+    avg_score: float | None = None
+    # Score distribution buckets for THIS job (spec §A9: distributions par offre).
+    score_buckets: dict[str, int] = {}
+
+
+class SourceConversion(BaseModel):
+    applied: int
+    shortlisted: int
+    hired: int
+    shortlist_rate: float
+    hire_rate: float
 
 
 class ReportOverview(BaseModel):
     total_applications: int
     by_state: dict[str, int]
     by_source: dict[str, int]
+    # Source efficiency: conversion by acquisition source (incl. linkedin_assist).
+    source_conversion: dict[str, SourceConversion]
     funnel: list[FunnelStage]
     avg_score: float | None
+    # Overall score distribution across all scored applications.
+    score_distribution: dict[str, int]
     shortlist_rate: float
     hire_rate: float
     open_gates: int
     per_job: list[JobFunnel]
+
+
+# Score bucket labels, low -> high (spec verdict bands informed the edges).
+_SCORE_BUCKETS = [("0-44", 0, 45), ("45-69", 45, 70), ("70-84", 70, 85), ("85-100", 85, 101)]
+
+
+def _bucket(score: int) -> str:
+    for label, lo, hi in _SCORE_BUCKETS:
+        if lo <= score < hi:
+            return label
+    return _SCORE_BUCKETS[-1][0]
 
 
 @router.get("/overview", response_model=ReportOverview)
@@ -78,6 +104,11 @@ def overview(
     user: Annotated[User, Depends(require_role("admin", "recruiter", "viewer"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ReportOverview:
+    return compute_overview(db)
+
+
+def compute_overview(db: Session) -> ReportOverview:
+    """The A9 KPI aggregation — shared by the live endpoint and the beat jobs."""
     apps = db.scalars(select(Application)).all()
     total = len(apps)
 
@@ -157,29 +188,65 @@ def overview(
         db.query(NeedsAttention).filter(NeedsAttention.status == "open").count()
     )
 
+    # Overall score distribution + per-job scores/buckets.
+    score_distribution: dict[str, int] = {label: 0 for label, _, _ in _SCORE_BUCKETS}
     jobs = {j.id: j for j in db.scalars(select(Job)).all()}
-    per: dict[int, dict[str, int]] = {}
+    per: dict[int, dict[str, Any]] = {}
     for a in apps:
-        d = per.setdefault(a.job_id, {"applicants": 0, "shortlisted": 0})
+        d = per.setdefault(
+            a.job_id,
+            {"applicants": 0, "shortlisted": 0, "scores": [], "buckets": {}},
+        )
         d["applicants"] += 1
         if a.id in shortlisted_ids:
             d["shortlisted"] += 1
+        s = a.payload.get("score") if isinstance(a.payload, dict) else None
+        overall = s.get("overall") if isinstance(s, dict) else None
+        if overall is not None:
+            b = _bucket(int(overall))
+            score_distribution[b] += 1
+            d["scores"].append(int(overall))
+            d["buckets"][b] = d["buckets"].get(b, 0) + 1
+
     per_job = [
         JobFunnel(
             job_id=jid,
             title=jobs[jid].title if jid in jobs else f"Job #{jid}",
             applicants=d["applicants"],
             shortlisted=d["shortlisted"],
+            avg_score=round(sum(d["scores"]) / len(d["scores"]), 1) if d["scores"] else None,
+            score_buckets=d["buckets"],
         )
         for jid, d in sorted(per.items())
     ]
+
+    # Source efficiency: conversion by acquisition source.
+    src_conv: dict[str, dict[str, int]] = {}
+    for a in apps:
+        source = str(a.payload.get("source") or "upload") if isinstance(a.payload, dict) else "upload"
+        s = src_conv.setdefault(source, {"applied": 0, "shortlisted": 0, "hired": 0})
+        s["applied"] += 1
+        if a.id in shortlisted_ids:
+            s["shortlisted"] += 1
+        if a.id in hired_ids:
+            s["hired"] += 1
+    source_conversion = {
+        source: SourceConversion(
+            applied=v["applied"], shortlisted=v["shortlisted"], hired=v["hired"],
+            shortlist_rate=round(v["shortlisted"] / v["applied"], 4) if v["applied"] else 0.0,
+            hire_rate=round(v["hired"] / v["applied"], 4) if v["applied"] else 0.0,
+        )
+        for source, v in sorted(src_conv.items())
+    }
 
     return ReportOverview(
         total_applications=total,
         by_state=by_state,
         by_source=by_source,
+        source_conversion=source_conversion,
         funnel=funnel,
         avg_score=avg_score,
+        score_distribution=score_distribution,
         shortlist_rate=shortlist_rate,
         hire_rate=hire_rate,
         open_gates=open_gates,

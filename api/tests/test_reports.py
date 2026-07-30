@@ -76,9 +76,17 @@ def test_overview_funnel_and_scores(client, auth_header):
     assert body["shortlist_rate"] == round(1 / 3, 4)
     assert body["hire_rate"] == 0.0
 
-    assert body["per_job"] == [
-        {"job_id": 1, "title": "Backend", "applicants": 3, "shortlisted": 1}
-    ]
+    assert len(body["per_job"]) == 1
+    pj = body["per_job"][0]
+    assert pj["job_id"] == 1 and pj["applicants"] == 3 and pj["shortlisted"] == 1
+    assert pj["avg_score"] == 65.0  # (80 + 50) / 2
+    assert pj["score_buckets"] == {"70-84": 1, "45-69": 1}  # scores 80 and 50
+
+    # Source conversion (both seeded apps have no source -> "upload").
+    assert body["source_conversion"]["upload"]["applied"] == 3
+    assert body["source_conversion"]["upload"]["shortlisted"] == 1
+    # Overall score distribution
+    assert body["score_distribution"]["70-84"] == 1 and body["score_distribution"]["45-69"] == 1
 
 
 def test_overview_empty(client, auth_header):
