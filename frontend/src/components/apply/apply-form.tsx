@@ -108,6 +108,12 @@ export function ApplyForm({ jobId, jobTitle }: { jobId: number; jobTitle: string
         <Input id="file" name="file" type="file" accept={ACCEPT} required />
         <p className="text-muted-foreground text-xs">PDF, DOCX, TXT or MD · max 10 MB</p>
       </div>
+      <p className="text-muted-foreground bg-muted/50 rounded-lg p-3 text-xs">
+        An AI assistant helps review applications and may pre-screen you by chat;
+        a human recruiter makes all final decisions. Your submission and any
+        pre-screening answers are recorded for your application. You can request
+        deletion of your data at any time from the candidate portal.
+      </p>
       <Button type="submit" disabled={pending} className="mt-2">
         {pending && <Loader2 className="size-4 animate-spin" />}
         {pending ? "Submitting…" : "Submit application"}

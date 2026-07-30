@@ -20,19 +20,43 @@ Flow:
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from typing import Any
 
+from app.models.audit_log import AuditLog
 from app.models.needs_attention import NeedsAttention
 from langgraph.types import interrupt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from orchestrator.agents.scorer import PROMPT_VERSION as SCORE_PROMPT_VERSION
 from orchestrator.side_effects import (
     _publish_job_impl,
     _send_offer_impl,
     _send_rejection_impl,
 )
+
+
+def _write_audit(
+    db: Session,
+    *,
+    actor: str,
+    action: str,
+    application_id: int,
+    payload: dict[str, Any],
+) -> None:
+    """Append an immutable audit row for a sensitive decision (spec §7 / EU AI Act):
+    who acted, on what, when, and with which model + prompt version."""
+    db.add(AuditLog(
+        actor=actor or "unknown",
+        action=action,
+        subject_type="application",
+        subject_id=str(application_id),
+        model=os.environ.get("MODEL_JUDGE", ""),
+        prompt_version=SCORE_PROMPT_VERSION,
+        payload=payload,
+    ))
 
 
 class GateNotApproved(RuntimeError):
@@ -135,17 +159,23 @@ def _assert_approved(db: Session, application_id: int, gate_name: str) -> NeedsA
 def execute_after_rejection_gate(
     db: Session, application_id: int, recipient: str, template: str
 ) -> dict[str, Any]:
-    _assert_approved(db, application_id, "rejection")
+    row = _assert_approved(db, application_id, "rejection")
+    _write_audit(db, actor=row.resolved_by or "", action="rejection_sent",
+                 application_id=application_id, payload={"template": template})
     return _send_rejection_impl(db, application_id, recipient, template)
 
 
 def execute_after_offer_gate(
     db: Session, application_id: int, recipient: str, template: str
 ) -> dict[str, Any]:
-    _assert_approved(db, application_id, "offer")
+    row = _assert_approved(db, application_id, "offer")
+    _write_audit(db, actor=row.resolved_by or "", action="offer_sent",
+                 application_id=application_id, payload={"template": template})
     return _send_offer_impl(db, application_id, recipient, template)
 
 
 def execute_after_publish_gate(db: Session, application_id: int, job_id: int, board: str) -> dict[str, Any]:
-    _assert_approved(db, application_id, "publish")
+    row = _assert_approved(db, application_id, "publish")
+    _write_audit(db, actor=row.resolved_by or "", action="job_published",
+                 application_id=application_id, payload={"job_id": job_id, "board": board})
     return _publish_job_impl(job_id, board)

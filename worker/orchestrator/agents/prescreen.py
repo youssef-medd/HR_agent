@@ -43,9 +43,11 @@ DEFAULT_QUESTIONS: list[str] = [
 ]
 
 CONSENT_PROMPT = (
-    "Hello! We'd like to ask a few quick pre-screening questions about the role "
-    "you applied for. Do you consent to continue? Reply YES to proceed or NO to "
-    "decline — you can stop at any time."
+    "Hello! I'm an AI assistant helping with recruitment — a human recruiter makes "
+    "all final decisions, and your answers are recorded for your application. We'd "
+    "like to ask a few quick pre-screening questions about the role you applied "
+    "for. Do you consent to continue? Reply YES to proceed or NO to decline — you "
+    "can stop at any time."
 )
 
 
