@@ -41,6 +41,7 @@ from orchestrator.agents.prescreen import (
     interpret_answer,
     interpret_consent,
     screening_questions,
+    slot_already_covered,
     summarize_prescreen,
 )
 from orchestrator.agents.scheduler import (
@@ -497,6 +498,25 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
         return reply
 
     for i, question in enumerate(questions):
+        # Slot-filling (spec §A5): skip a question the candidate has already
+        # answered. Deterministic and a pure function of the accumulated answers,
+        # so the interrupt sequence still replays identically.
+        if answers:
+            coverage = slot_already_covered(question, answers, user_id=str(app_id))
+            if coverage.covered and coverage.answer:
+                answered_at = (
+                    prior_answers[i]["at"]
+                    if i < len(prior_answers)
+                    else datetime.now(UTC).isoformat()
+                )
+                answers.append(
+                    {"q": question, "a": coverage.answer, "at": answered_at, "auto": True}
+                )
+                block["answers"] = answers
+                block["idx"] = i + 1
+                _save_prescreen(db, app_id, block)
+                continue
+
         reply = _ask(f"prescreen_q{i}", question)
         try:
             interp = interpret_answer(question, reply, user_id=str(app_id))

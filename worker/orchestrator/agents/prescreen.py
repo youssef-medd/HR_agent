@@ -103,7 +103,7 @@ class QuestionSet(BaseModel):
 
 _QGEN_SYSTEM = (
     "You are a technical recruiter preparing a short pre-screening for a specific "
-    "role. Given the job's structured spec, generate 5 to 7 concise, "
+    "role. Given the job's structured spec, generate 5 to 8 concise, "
     "job-SPECIFIC screening questions a candidate can answer in one line each. "
     "Cover: 2-3 confirmations of the role's must-have skills (phrased specifically, "
     "e.g. 'Describe a RAG pipeline you built' for an AI role), plus availability / "
@@ -244,6 +244,54 @@ def interpret_consent(message: str, *, user_id: str | None = None) -> ConsentInt
         )
     except ValidationError as exc:
         raise PrescreenError(f"Consent reply did not match schema: {exc}") from exc
+
+
+class SlotCoverage(BaseModel):
+    """Whether an upcoming question is already answered by what was said."""
+
+    covered: bool = Field(default=False)
+    answer: str = Field(default="", description="The already-given answer, one line")
+
+
+_COVERAGE_SYSTEM = (
+    "You check whether a pre-screening question has ALREADY been answered by "
+    "what the candidate said earlier. You get the question and the prior "
+    "question/answer pairs. Respond with a single JSON object {covered, answer}. "
+    "Set covered=true ONLY when an earlier reply clearly and specifically answers "
+    "the new question (e.g. they already stated their notice period), and put "
+    "that answer in `answer` as one concise line. If it is merely related, "
+    "partial, or implied, set covered=false and answer=\"\". Never guess. "
+    "Nothing else."
+)
+
+
+def slot_already_covered(
+    question: str, prior_qa: list[dict], *, user_id: str | None = None
+) -> SlotCoverage:
+    """True when `question` is already answered by earlier replies (spec §A5:
+    'asks only unanswered slots').
+
+    Deterministic (temperature 0) and fail-safe: any error returns not-covered,
+    so the question is asked rather than silently skipped.
+    """
+    if not prior_qa:
+        return SlotCoverage()
+    prior = json.dumps(
+        [{"q": p.get("q", ""), "a": p.get("a", "")} for p in prior_qa], ensure_ascii=False
+    )
+    try:
+        return llm_call(
+            profile="chat",
+            messages=[
+                {"role": "system", "content": _COVERAGE_SYSTEM},
+                {"role": "user", "content": f"NEW QUESTION:\n{question}\n\nPRIOR Q&A:\n{prior}"},
+            ],
+            schema=SlotCoverage,
+            user_id=user_id,
+            metadata={"agent": "A5", "prompt_version": PROMPT_VERSION, "turn": "coverage"},
+        )
+    except Exception:  # noqa: BLE001 — never skip a slot because the check failed
+        return SlotCoverage()
 
 
 def interpret_answer(

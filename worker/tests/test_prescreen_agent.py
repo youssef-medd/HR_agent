@@ -144,3 +144,26 @@ def test_summarize_prescreen_never_blocks(monkeypatch):
     monkeypatch.setattr(prescreen_mod, "llm_call", boom)
     out = summarize_prescreen(title="X", cv={}, answers=[])
     assert out.recap == "" and out.slots.availability == ""  # empty, no raise
+
+
+def test_slot_already_covered_detects_and_fails_safe(monkeypatch):
+    from orchestrator.agents.prescreen import SlotCoverage, slot_already_covered
+
+    # No prior answers -> never skip, and no LLM call.
+    monkeypatch.setattr(prescreen_mod, "llm_call", lambda **_: (_ for _ in ()).throw(AssertionError()))
+    assert slot_already_covered("Notice period?", []).covered is False
+
+    # Covered by an earlier reply.
+    monkeypatch.setattr(
+        prescreen_mod, "llm_call",
+        lambda **_: SlotCoverage(covered=True, answer="1 month"),
+    )
+    out = slot_already_covered("Notice period?", [{"q": "Experience?", "a": "6y, free in 1 month"}])
+    assert out.covered is True and out.answer == "1 month"
+
+    # Any failure must fail SAFE (ask the question rather than skip it).
+    def boom(**_):
+        raise RuntimeError("llm down")
+
+    monkeypatch.setattr(prescreen_mod, "llm_call", boom)
+    assert slot_already_covered("Notice period?", [{"q": "x", "a": "y"}]).covered is False

@@ -14,7 +14,11 @@ from app.models.application import Application
 from langgraph.types import Command
 
 from orchestrator.agents.parser import CVData
-from orchestrator.agents.prescreen import AnswerInterpretation, ConsentInterpretation
+from orchestrator.agents.prescreen import (
+    AnswerInterpretation,
+    ConsentInterpretation,
+    SlotCoverage,
+)
 from orchestrator.agents.scorer import ScoreResult
 from orchestrator.checkpointer import memory_saver
 from orchestrator.graph import build_graph
@@ -59,6 +63,9 @@ def _stub_pipeline(monkeypatch, *, recommendation="shortlist"):
     )
     # A5 summariser is offline in tests (no gateway call).
     monkeypatch.setattr(nodes, "summarize_prescreen", lambda **_: PrescreenSummary())
+    # Slot-coverage check off by default: every question is asked unless a test
+    # explicitly exercises the skip path.
+    monkeypatch.setattr(nodes, "slot_already_covered", lambda *a, **k: SlotCoverage())
 
 
 def test_prescreen_happy_path(db_factory, monkeypatch):
@@ -266,3 +273,43 @@ def test_prescreen_stores_summary_and_slots(db_factory, monkeypatch):
         assert block["flags"]["great_signals"] == ["ships fast"]
         # slots merged into the profile payload
         assert payload["prescreen_slots"]["salary_expectation"] == "50k"
+
+
+def test_prescreen_skips_already_answered_slot(db_factory, monkeypatch):
+    """Spec §A5 slot-filling: only unanswered slots are asked."""
+    from orchestrator import nodes
+
+    _stub_pipeline(monkeypatch)
+    monkeypatch.setattr(nodes, "interpret_consent", lambda msg, **_: ConsentInterpretation(consent=True))
+    monkeypatch.setattr(
+        nodes, "interpret_answer",
+        lambda q, msg, **_: AnswerInterpretation(answer=msg, answered=True),
+    )
+    # The 2nd question ("Notice period?") is already covered by the 1st answer.
+    monkeypatch.setattr(
+        nodes, "slot_already_covered",
+        lambda q, prior, **k: SlotCoverage(covered=True, answer="1 month")
+        if "Notice" in q
+        else SlotCoverage(),
+    )
+
+    _sent_log_reset()
+    graph = build_graph(db_factory, memory_saver())
+    app_id = _seed(db_factory)  # web channel, QUESTIONS has 2 entries
+    config = {"configurable": {"thread_id": str(app_id)}}
+
+    graph.invoke({"application_id": app_id, "stage": "RECEIVED", "attempt": 1}, config=config)
+    graph.invoke(Command(resume={"candidate_message": "yes"}), config=config)  # consent
+    # ONE answer covers both slots -> the run completes without a second question
+    result = graph.invoke(
+        Command(resume={"candidate_message": "6 years, and I can start in 1 month"}), config=config
+    )
+
+    assert result["stage"] == "PRESCREENED"
+    with db_factory() as db:
+        block = db.get(Application, app_id).payload["prescreen"]
+        assert [a["q"] for a in block["answers"]] == QUESTIONS  # both slots stored
+        assert block["answers"][1]["a"] == "1 month"
+        assert block["answers"][1]["auto"] is True  # filled without asking
+        # the skipped question was never sent to the candidate
+        assert not any("Notice period?" == m["text"] for m in block["transcript"])
