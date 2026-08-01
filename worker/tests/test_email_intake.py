@@ -8,6 +8,7 @@ from email.message import EmailMessage
 
 from app.models.application import Application
 from app.models.job import Job
+
 from orchestrator.email_intake import (
     IncomingCV,
     build_application,

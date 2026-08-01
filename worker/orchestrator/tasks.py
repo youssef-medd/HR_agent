@@ -303,6 +303,83 @@ def purge_expired_applications() -> dict[str, Any]:
     return {"purged": purged}
 
 
+def _process_onboarding_docs(db, *, now: datetime | None = None) -> dict[str, list[int]]:
+    """A8 — chase document collection to 100%.
+
+    Pending document tasks past their due date get one candidate reminder; if
+    still outstanding after an escalation grace window, they are marked expired
+    and a NeedsAttention row escalates them to the HR manager. Testable via `now`.
+    """
+    from app.models.onboarding_task import OnboardingTask
+
+    now = now or datetime.now(UTC)
+    escalate_days = int(os.environ.get("ONBOARDING_ESCALATE_DAYS", "3"))
+    reminded_apps: list[int] = []
+    escalated: list[int] = []
+
+    pending = db.scalars(
+        select(OnboardingTask).where(
+            OnboardingTask.category == "document",
+            OnboardingTask.status == "pending",
+        )
+    ).all()
+
+    by_app: dict[int, list] = {}
+    for t in pending:
+        due = t.due_at
+        if due is None:
+            continue
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=UTC)
+        if now >= due:
+            by_app.setdefault(t.application_id, []).append((t, due))
+
+    for app_id, items in by_app.items():
+        app_row = db.get(Application, app_id)
+        if app_row is None:
+            continue
+        # Escalate when the earliest overdue doc is past the grace window and a
+        # reminder already went out.
+        already_reminded = all(t.reminded_at is not None for t, _ in items)
+        oldest_due = min(due for _, due in items)
+        if already_reminded and now >= oldest_due + timedelta(days=escalate_days):
+            for t, _ in items:
+                t.status = "expired"
+            db.add(NeedsAttention(
+                application_id=app_id, reason="onboarding_docs_overdue",
+                context={"documents": [t.label for t, _ in items]},
+            ))
+            db.commit()
+            escalated.append(app_id)
+            continue
+
+        if not already_reminded:
+            if "@" in (app_row.candidate_ref or ""):
+                send_email(
+                    app_row.candidate_ref,
+                    "Reminder: documents needed to complete your onboarding",
+                    "Hi,\n\nA few onboarding documents are still needed. Please upload them "
+                    f"here:\n{portal_link(app_row.candidate_ref, app_id)}\n\nThanks!",
+                )
+            for t, _ in items:
+                t.reminded_at = now
+            db.commit()
+            reminded_apps.append(app_id)
+
+    return {"reminded": reminded_apps, "escalated": escalated}
+
+
+@celery.task(name="orchestrator.process_onboarding_docs")
+def process_onboarding_docs() -> dict[str, Any]:
+    """A8 — beat job: remind + escalate outstanding onboarding documents."""
+    with _db_factory() as db:
+        result = _process_onboarding_docs(db)
+    if result["reminded"] or result["escalated"]:
+        logger.info("Onboarding docs: reminded %s, escalated %s",
+                    result["reminded"], result["escalated"])
+    return result
+
+
 def _digest_body(metrics: dict[str, Any]) -> str:
     """Plain-text weekly KPI digest from an overview snapshot."""
     funnel = " → ".join(f"{f['stage']} {f['reached']}" for f in metrics.get("funnel", []))

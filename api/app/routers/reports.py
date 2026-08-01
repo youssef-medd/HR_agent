@@ -289,6 +289,42 @@ def messaging_summary(
     )
 
 
+class MessageRow(BaseModel):
+    id: int
+    application_id: int | None
+    recipient: str
+    channel: str
+    template_id: str | None
+    status: str
+    body: str
+    created_at: str
+
+
+@router.get("/messages", response_model=list[MessageRow])
+def message_center(
+    user: Annotated[User, Depends(require_role("admin", "recruiter"))],
+    db: Annotated[Session, Depends(get_db)],
+    limit: int = 100,
+) -> list[MessageRow]:
+    """A7 message center — the most recent logged outbound messages."""
+    rows = db.scalars(
+        select(MessageLog).order_by(MessageLog.created_at.desc()).limit(min(limit, 500))
+    ).all()
+    return [
+        MessageRow(
+            id=m.id,
+            application_id=m.application_id,
+            recipient=m.recipient,
+            channel=m.channel,
+            template_id=m.template_id,
+            status=m.status,
+            body=(m.rendered_body or "")[:2000],
+            created_at=m.created_at.isoformat() if m.created_at else "",
+        )
+        for m in rows
+    ]
+
+
 _CSV_COLUMNS = [
     "id", "job_id", "job_title", "candidate_ref", "state", "source",
     "score_overall", "recommendation", "created_at",

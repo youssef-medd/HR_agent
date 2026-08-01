@@ -3,9 +3,10 @@ import { cookies } from "next/headers";
 
 import { API_URL, SESSION_COOKIE } from "@/lib/api/client";
 
-/** Forwards to FastAPI POST /jobs/{id}/structure (A1 job intake). */
+/** Forwards to FastAPI POST /jobs/{id}/structure (A1 job intake), body optional
+ * ({brief} or {answers}). */
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const jar = await cookies();
@@ -15,9 +16,14 @@ export async function POST(
   }
 
   const { id } = await params;
+  const body = await request.text();
   const upstream = await fetch(`${API_URL}/jobs/${id}/structure`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
+    body: body || undefined,
     cache: "no-store",
   });
 

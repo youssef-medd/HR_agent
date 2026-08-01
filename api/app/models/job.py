@@ -31,6 +31,9 @@ class Job(Base):
     # A1 structured output: JobSpec + weights + channel content. Null until the
     # recruiter runs "Structure with AI".
     spec: Mapped[dict | None] = mapped_column(_JSON, nullable=True)
+    # A2 cached sourcing kit (search strings, keywords, platforms, outreach).
+    # Cached so reopening the panel does not burn another LLM call.
+    sourcing: Mapped[dict | None] = mapped_column(_JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -18,7 +18,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from orchestrator.emails import render_email, send_email
+from orchestrator.emails import personalize_opener, render_email, send_email
 from orchestrator.message_log import candidate_language, is_rate_limited, log_message
 
 # In-memory sent log — the audit surface for exactly-once delivery. Kept even
@@ -143,21 +143,35 @@ def _send_notification(
     return entry
 
 
+def _job_title(db: Session, application_id: int) -> str:
+    """Best-effort job title for an application (for A7 personalization)."""
+    from app.models.application import Application
+    from app.models.job import Job
+
+    app_row = db.get(Application, application_id)
+    if app_row is None:
+        return ""
+    job = db.get(Job, app_row.job_id)
+    return job.title if job is not None else ""
+
+
 def _send_rejection_impl(
     db: Session, application_id: int, recipient: str, template: str, lang: str | None = None
 ) -> dict[str, Any]:
-    subject, body = render_email(
-        template or "rejection", lang=lang or candidate_language(db, application_id)
-    )
+    lang = lang or candidate_language(db, application_id)
+    personal = personalize_opener("rejection", _job_title(db, application_id), lang,
+                                  user_id=str(application_id))
+    subject, body = render_email(template or "rejection", lang=lang, personal=personal)
     return _send_notification(db, application_id, recipient, "rejection", subject, body)
 
 
 def _send_offer_impl(
     db: Session, application_id: int, recipient: str, template: str, lang: str | None = None
 ) -> dict[str, Any]:
-    subject, body = render_email(
-        template or "offer", lang=lang or candidate_language(db, application_id)
-    )
+    lang = lang or candidate_language(db, application_id)
+    personal = personalize_opener("offer", _job_title(db, application_id), lang,
+                                  user_id=str(application_id))
+    subject, body = render_email(template or "offer", lang=lang, personal=personal)
     return _send_notification(db, application_id, recipient, "offer", subject, body)
 
 

@@ -263,6 +263,63 @@ def test_booking_confirm_enqueues(client, monkeypatch):
     assert "Tue 3pm" in enqueued[0][1]["candidate_message"]
 
 
+def _seed_onboarding(client, *, ref="cand@x.io"):
+    from app.db import get_db
+    from app.models.application import Application
+    from app.models.onboarding_task import OnboardingTask
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        row = Application(job_id=1, candidate_ref=ref, state="ONBOARDING", payload={})
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        db.add_all([
+            OnboardingTask(application_id=row.id, category="document", label="CIN", status="pending"),
+            OnboardingTask(application_id=row.id, category="document", label="RIB", status="pending"),
+            OnboardingTask(application_id=row.id, category="agenda", label="Day 1", status="pending"),
+        ])
+        db.commit()
+        doc_id = db.query(OnboardingTask).filter_by(application_id=row.id, label="CIN").one().id
+        return row.id, doc_id
+    finally:
+        db.close()
+
+
+def test_onboarding_view_progress(client):
+    app_id, _ = _seed_onboarding(client)
+    resp = client.get("/public/onboarding", params={"email": "cand@x.io", "application_id": app_id})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["documents_total"] == 2 and body["documents_received"] == 0
+    assert body["complete"] is False
+    assert len(body["tasks"]) == 3
+
+
+def test_onboarding_upload_marks_received(client):
+    app_id, doc_id = _seed_onboarding(client)
+    resp = client.post(
+        "/public/onboarding/upload",
+        data={"email": "cand@x.io", "application_id": str(app_id), "task_id": str(doc_id)},
+        files={"file": ("cin.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["documents_received"] == 1
+    cin = next(t for t in body["tasks"] if t["label"] == "CIN")
+    assert cin["status"] == "received" and cin["uploaded"] is True
+
+
+def test_onboarding_upload_wrong_email_404(client):
+    app_id, doc_id = _seed_onboarding(client)
+    resp = client.post(
+        "/public/onboarding/upload",
+        data={"email": "no@one.io", "application_id": str(app_id), "task_id": str(doc_id)},
+        files={"file": ("cin.pdf", b"data", "application/pdf")},
+    )
+    assert resp.status_code == 404
+
+
 def test_booking_confirm_wrong_state_409(client):
     from app.db import get_db
     from app.models.application import Application

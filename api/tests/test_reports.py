@@ -116,6 +116,34 @@ def test_applications_csv_requires_auth(client):
     assert client.get("/reports/applications.csv").status_code == 401
 
 
+def test_message_center_lists_recent(client, auth_header):
+    from app.db import get_db
+    from app.models.message_log import MessageLog
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        db.add_all([
+            MessageLog(application_id=1, recipient="a@x.io", channel="email",
+                       template_id="offer", rendered_body="Your offer, Sara", status="sent"),
+            MessageLog(application_id=1, recipient="+216", channel="whatsapp",
+                       template_id="prescreen_question", rendered_body="Q1?", status="stub"),
+        ])
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.get("/reports/messages", headers=auth_header)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 2
+    assert {r["channel"] for r in body} == {"email", "whatsapp"}
+    assert any(r["body"] == "Your offer, Sara" for r in body)
+
+
+def test_message_center_requires_recruiter(client):
+    assert client.get("/reports/messages").status_code == 401
+
+
 def test_messaging_summary(client, auth_header):
     from app.db import get_db
     from app.models.message_log import MessageLog

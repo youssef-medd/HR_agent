@@ -14,13 +14,12 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("APP_ENV", "test")
 
 import pytest  # noqa: E402
+from app.db import Base  # noqa: E402
 from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 from sqlalchemy.pool import StaticPool  # noqa: E402
 
-from app.db import Base  # noqa: E402
 from app import models  # noqa: E402, F401
-
 
 _engine = create_engine(
     "sqlite:///:memory:",
@@ -35,6 +34,17 @@ def _schema():
     Base.metadata.create_all(_engine)
     yield
     Base.metadata.drop_all(_engine)
+
+
+@pytest.fixture(autouse=True)
+def _no_personalization(monkeypatch):
+    """A7 personalization calls the LLM; keep it offline + deterministic in tests.
+    Tests that exercise it patch it back explicitly."""
+    import orchestrator.emails as _emails
+    import orchestrator.side_effects as _se
+
+    monkeypatch.setattr(_emails, "personalize_opener", lambda *a, **k: "")
+    monkeypatch.setattr(_se, "personalize_opener", lambda *a, **k: "")
 
 
 @pytest.fixture

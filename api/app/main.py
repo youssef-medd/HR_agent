@@ -16,6 +16,7 @@ from app.routers import (
     auth,
     calcom,
     chat,
+    handbook,
     jobs,
     public,
     reports,
@@ -39,6 +40,7 @@ app.include_router(attention.router)
 app.include_router(jobs.router)
 app.include_router(public.router)
 app.include_router(reports.router)
+app.include_router(handbook.router)
 app.include_router(whatsapp.router)
 app.include_router(calcom.router)
 

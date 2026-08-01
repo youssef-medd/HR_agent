@@ -66,20 +66,56 @@ _SYSTEM_PROMPT = (
 )
 
 
+def _spec_brief(spec: dict | None) -> str:
+    """Flatten A1's structured JobSpec into sourcing-relevant lines.
+
+    The must-haves, seniority and languages are exactly what makes a boolean
+    string precise, so A2 uses A1's structured output when it exists rather
+    than only the free-text description.
+    """
+    if not spec:
+        return ""
+    inner = spec.get("spec") if isinstance(spec.get("spec"), dict) else spec
+    if not isinstance(inner, dict):
+        return ""
+    lines: list[str] = []
+    for key, label in (
+        ("seniority", "SENIORITY"),
+        ("must_have", "MUST HAVE"),
+        ("nice_to_have", "NICE TO HAVE"),
+        ("languages", "LANGUAGES"),
+        ("eliminatory_criteria", "HARD REQUIREMENTS"),
+    ):
+        val = inner.get(key)
+        if isinstance(val, list) and val:
+            lines.append(f"{label}: {', '.join(str(v) for v in val)}")
+        elif isinstance(val, str) and val.strip():
+            lines.append(f"{label}: {val}")
+    return "\n".join(lines)
+
+
 def generate_sourcing_kit(
     *,
     title: str,
     description: str | None = None,
     department: str | None = None,
     location: str | None = None,
+    spec: dict | None = None,
     user_id: str | None = None,
 ) -> SourcingKit:
-    """Generate a sourcing kit for a job via the chat gateway."""
+    """Generate a sourcing kit for a job via the chat gateway.
+
+    `spec` is A1's structured JobIntake (when the job has been structured); its
+    must-haves and seniority sharpen the search strings considerably.
+    """
     parts = [f"TITLE: {title}"]
     if department:
         parts.append(f"DEPARTMENT: {department}")
     if location:
         parts.append(f"LOCATION: {location}")
+    brief = _spec_brief(spec)
+    if brief:
+        parts.append("STRUCTURED REQUIREMENTS (use these for precision):\n" + brief)
     parts.append(f"DESCRIPTION:\n{(description or '').strip() or '(none provided)'}")
     user_content = "\n".join(parts)
 

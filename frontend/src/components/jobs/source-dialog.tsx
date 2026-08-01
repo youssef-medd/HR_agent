@@ -17,7 +17,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { SourcingKit } from "@/lib/api/client";
+import type { SourcedProfile, SourcingKit } from "@/lib/api/client";
+
+const STATUS_TONE: Record<string, string> = {
+  sourced: "bg-muted text-muted-foreground",
+  contacted: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  replied: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+  imported: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+};
 
 function CopyButton({ text, label }: { text: string; label: string }) {
   async function copy() {
@@ -43,11 +50,57 @@ export function SourceDialog({ jobId, jobTitle }: { jobId: number; jobTitle: str
   const [importText, setImportText] = React.useState("");
   const [importName, setImportName] = React.useState("");
   const [importing, setImporting] = React.useState(false);
+  // A2 sourced-people tracking
+  const [sourced, setSourced] = React.useState<SourcedProfile[]>([]);
+  const [newName, setNewName] = React.useState("");
+  const [newUrl, setNewUrl] = React.useState("");
+  const [adding, setAdding] = React.useState(false);
 
-  async function generate() {
+  const loadSourced = React.useCallback(async () => {
+    const res = await fetch(`/api/jobs/${jobId}/sourced`, { cache: "no-store" });
+    if (res.ok) setSourced((await res.json()) as SourcedProfile[]);
+  }, [jobId]);
+
+  async function addSourced() {
+    if (!newName.trim() && !newUrl.trim()) {
+      toast.error("Add a name or a profile URL");
+      return;
+    }
+    setAdding(true);
+    const res = await fetch(`/api/jobs/${jobId}/sourced`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ full_name: newName, profile_url: newUrl || null }),
+    });
+    setAdding(false);
+    if (res.status === 409) {
+      toast.error("Already sourced for this job — don't contact them twice");
+      return;
+    }
+    if (!res.ok) {
+      toast.error("Could not add");
+      return;
+    }
+    setNewName("");
+    setNewUrl("");
+    loadSourced();
+  }
+
+  async function markContacted(id: number) {
+    const res = await fetch(`/api/jobs/sourced/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "contacted" }),
+    });
+    if (res.ok) loadSourced();
+  }
+
+  async function generate(refresh = false) {
     setLoading(true);
     setKit(null);
-    const res = await fetch(`/api/jobs/${jobId}/sourcing`, { method: "POST" });
+    const res = await fetch(`/api/jobs/${jobId}/sourcing${refresh ? "?refresh=true" : ""}`, {
+      method: "POST",
+    });
     setLoading(false);
     if (!res.ok) {
       const err = await res.json().catch(() => null);
@@ -83,7 +136,10 @@ export function SourceDialog({ jobId, jobTitle }: { jobId: number; jobTitle: str
 
   function onOpenChange(next: boolean) {
     setOpen(next);
-    if (next && !kit && !loading) generate();
+    if (next) {
+      if (!kit && !loading) generate();
+      loadSourced();
+    }
   }
 
   return (
@@ -159,11 +215,85 @@ export function SourceDialog({ jobId, jobTitle }: { jobId: number; jobTitle: str
               </div>
             </section>
 
-            <Button type="button" variant="outline" onClick={generate} className="w-full">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => generate(true)}
+              className="w-full"
+            >
               Regenerate
             </Button>
           </div>
         )}
+
+        {/* Sourced people — the record that prevents contacting someone twice */}
+        <section className="mt-2 border-t pt-4">
+          <p className="eyebrow mb-2">Sourced people ({sourced.length})</p>
+          <p className="text-muted-foreground mb-3 text-xs">
+            Log each person you find, so nobody gets contacted twice.
+          </p>
+
+          <div className="mb-3 grid gap-2 sm:grid-cols-[1fr_1.4fr_auto]">
+            <Input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Full name"
+              className="h-9"
+            />
+            <Input
+              value={newUrl}
+              onChange={(e) => setNewUrl(e.target.value)}
+              placeholder="linkedin.com/in/…"
+              className="h-9"
+            />
+            <Button type="button" size="sm" onClick={addSourced} disabled={adding} className="h-9">
+              {adding ? <Loader2 className="size-4 animate-spin" /> : "Add"}
+            </Button>
+          </div>
+
+          {sourced.length > 0 && (
+            <ul className="space-y-1.5">
+              {sourced.map((p) => (
+                <li
+                  key={p.id}
+                  className="bg-muted/50 flex items-center justify-between gap-2 rounded-lg p-2 text-sm"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{p.full_name || "—"}</p>
+                    {p.profile_url && (
+                      <a
+                        href={p.profile_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-muted-foreground truncate text-xs hover:underline"
+                      >
+                        {p.profile_url}
+                      </a>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] capitalize ${STATUS_TONE[p.status] ?? "bg-muted"}`}
+                    >
+                      {p.status}
+                    </span>
+                    {p.status === "sourced" && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-xs"
+                        onClick={() => markContacted(p.id)}
+                      >
+                        Mark contacted
+                      </Button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
         {/* Import a sourced profile — the "assist" half of A2 */}
         <section className="mt-2 border-t pt-4">

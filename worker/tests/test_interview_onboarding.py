@@ -7,11 +7,11 @@ NEEDS_ATTENTION.
 
 from __future__ import annotations
 
-from langgraph.types import Command
-
 from app.agents.onboarder import OnboardingKit
 from app.models.application import Application
 from app.models.job import Job
+from langgraph.types import Command
+
 from orchestrator.agents.parser import CVData
 from orchestrator.agents.prescreen import AnswerInterpretation, ConsentInterpretation
 from orchestrator.agents.scheduler import BookingConfirmation

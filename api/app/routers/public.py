@@ -23,6 +23,7 @@ from app.db import get_db
 from app.models.application import Application
 from app.models.application_event import ApplicationEvent
 from app.models.job import Job
+from app.models.onboarding_task import OnboardingTask
 from app.queue import enqueue_application_step
 from app.rgpd import erase_candidate
 
@@ -340,3 +341,91 @@ def erase_candidate_data(
     row = _verify_candidate(db, body.application_id, body.email)
     count = erase_candidate(db, row.candidate_ref, reason="candidate_request")
     return EraseView(erased=True, applications_erased=count)
+
+
+# --- A8 onboarding: candidate document upload portal -------------------------
+
+
+class OnbTaskView(BaseModel):
+    id: int
+    category: str
+    label: str
+    status: str
+    due_at: str | None
+    uploaded: bool
+
+
+class OnboardingView(BaseModel):
+    state: str
+    tasks: list[OnbTaskView]
+    documents_total: int
+    documents_received: int
+    complete: bool
+
+
+def _onboarding_view(db: Session, row: Application) -> OnboardingView:
+    tasks = db.scalars(
+        select(OnboardingTask).where(OnboardingTask.application_id == row.id)
+        .order_by(OnboardingTask.category, OnboardingTask.id)
+    ).all()
+    docs = [t for t in tasks if t.category == "document"]
+    received = [t for t in docs if t.status in ("received", "done")]
+    return OnboardingView(
+        state=row.state,
+        tasks=[
+            OnbTaskView(
+                id=t.id, category=t.category, label=t.label, status=t.status,
+                due_at=t.due_at.isoformat() if t.due_at else None,
+                uploaded=t.uploaded_ref is not None,
+            )
+            for t in tasks
+        ],
+        documents_total=len(docs),
+        documents_received=len(received),
+        complete=bool(docs) and len(received) == len(docs),
+    )
+
+
+@router.get("/onboarding", response_model=OnboardingView)
+def onboarding_view(
+    email: str,
+    application_id: int,
+    db: Annotated[Session, Depends(get_db)],
+) -> OnboardingView:
+    """The candidate's onboarding checklist + document-collection progress."""
+    row = _verify_candidate(db, application_id, email)
+    return _onboarding_view(db, row)
+
+
+@router.post("/onboarding/upload", response_model=OnboardingView)
+async def onboarding_upload(
+    db: Annotated[Session, Depends(get_db)],
+    email: Annotated[str, Form()],
+    application_id: Annotated[int, Form()],
+    task_id: Annotated[int, Form()],
+    file: Annotated[UploadFile, File()],
+) -> OnboardingView:
+    """Candidate uploads one required document; marks its task received."""
+    row = _verify_candidate(db, application_id, email)
+    task = db.get(OnboardingTask, task_id)
+    if task is None or task.application_id != row.id or task.category != "document":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document task not found")
+
+    filename = file.filename or "upload"
+    if not filename.lower().endswith(_ALLOWED_EXT):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported file type. Allowed: {', '.join(_ALLOWED_EXT)}",
+        )
+    data = await file.read()
+    if len(data) > _MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File exceeds {_MAX_BYTES // (1024 * 1024)} MB",
+        )
+    # File-store integration (MinIO) lands later; for now record the filename ref
+    # and mark the document received so collection progress advances.
+    task.uploaded_ref = filename
+    task.status = "received"
+    db.commit()
+    return _onboarding_view(db, row)

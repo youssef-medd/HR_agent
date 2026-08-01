@@ -74,6 +74,23 @@ export interface PrescreenMessage {
   text: string;
 }
 
+export interface OnbTask {
+  id: number;
+  category: string;
+  label: string;
+  status: string;
+  due_at: string | null;
+  uploaded: boolean;
+}
+
+export interface OnboardingView {
+  state: string;
+  tasks: OnbTask[];
+  documents_total: number;
+  documents_received: number;
+  complete: boolean;
+}
+
 export interface PrescreenBlock {
   status?: string;
   channel?: string;
@@ -151,6 +168,7 @@ export interface JobWeights {
   skills: number;
   experience: number;
   education: number;
+  sector: number;
 }
 
 export interface JobChannels {
@@ -164,6 +182,34 @@ export interface JobIntake {
   spec: JobSpecStruct;
   weights: JobWeights;
   channels: JobChannels;
+  tracking_link: string;
+  overridden: boolean;
+}
+
+export interface SourcedProfile {
+  id: number;
+  job_id: number;
+  full_name: string;
+  profile_url: string | null;
+  platform: string;
+  status: string;
+  outreach_tone: string | null;
+  notes: string | null;
+  application_id: number | null;
+  contacted_at: string | null;
+  created_at: string;
+}
+
+export interface IntakeQuestion {
+  key: string;
+  q: string;
+}
+
+export interface IntakeTurn {
+  done: boolean;
+  question: string;
+  title: string;
+  intake: JobIntake | null;
 }
 
 export interface TimelineEntry {
@@ -240,6 +286,17 @@ export interface JobFunnel {
   shortlisted: number;
   avg_score?: number | null;
   score_buckets?: Record<string, number>;
+}
+
+export interface MessageRow {
+  id: number;
+  application_id: number | null;
+  recipient: string;
+  channel: string;
+  template_id: string | null;
+  status: string;
+  body: string;
+  created_at: string;
 }
 
 export interface SourceConversion {

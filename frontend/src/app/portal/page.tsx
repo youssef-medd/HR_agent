@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowLeft, Loader2, Search } from "lucide-react";
 
 import { BookingPanel } from "@/components/portal/booking-panel";
+import { OnboardingPanel } from "@/components/portal/onboarding-panel";
 import { PrescreenChat } from "@/components/portal/prescreen-chat";
 import { StateBadge } from "@/components/shell/state-badge";
 import { Button } from "@/components/ui/button";
@@ -169,6 +170,12 @@ export default function PortalPage() {
       {result && (result.state === "PRESCREENED" || result.state === "INTERVIEW_SCHEDULED") && (
         <div className="mt-6">
           <BookingPanel email={email.trim()} appId={result.id} />
+        </div>
+      )}
+
+      {result && (result.state === "HIRED" || result.state === "ONBOARDING") && (
+        <div className="mt-6">
+          <OnboardingPanel email={email.trim()} appId={result.id} />
         </div>
       )}
 

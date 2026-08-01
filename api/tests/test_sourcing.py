@@ -140,3 +140,101 @@ def test_import_profile_404_for_missing_job(client, auth_header):
         "/jobs/9999/import-profile", json={"raw_text": "x"}, headers=auth_header
     )
     assert resp.status_code == 404
+
+
+# --- A2 kit caching + spec-aware prompt + sourced tracking -------------------
+
+
+def test_sourcing_kit_is_cached_and_refreshable(client, auth_header, monkeypatch):
+    """Reopening the panel must not burn another LLM call."""
+    from app.routers import jobs as jobs_router
+
+    calls: list[int] = []
+
+    def fake(**_):
+        calls.append(1)
+        return _kit()
+
+    monkeypatch.setattr(jobs_router, "generate_sourcing_kit", fake)
+    job_id = _seed_job(client)
+
+    client.post(f"/jobs/{job_id}/sourcing", headers=auth_header)
+    client.post(f"/jobs/{job_id}/sourcing", headers=auth_header)  # served from cache
+    assert len(calls) == 1
+
+    # explicit refresh regenerates
+    client.post(f"/jobs/{job_id}/sourcing?refresh=true", headers=auth_header)
+    assert len(calls) == 2
+
+
+def test_sourcing_uses_job_spec_for_precision(monkeypatch):
+    """A1's must-haves must reach the sourcer prompt."""
+    captured: dict = {}
+
+    def fake(*, profile, messages, schema, **_):
+        captured["content"] = messages[1]["content"]
+        return _kit()
+
+    monkeypatch.setattr(sourcer_mod, "llm_call", fake)
+    generate_sourcing_kit(
+        title="Backend Engineer",
+        description="Build APIs",
+        spec={"spec": {"seniority": "senior", "must_have": ["Python", "PostgreSQL"],
+                       "eliminatory_criteria": ["5+ years"]}},
+    )
+    assert "MUST HAVE: Python, PostgreSQL" in captured["content"]
+    assert "SENIORITY: senior" in captured["content"]
+    assert "HARD REQUIREMENTS: 5+ years" in captured["content"]
+
+
+def test_sourced_profile_tracking_and_duplicate_guard(client, auth_header):
+    job_id = _seed_job(client)
+
+    created = client.post(
+        f"/jobs/{job_id}/sourced", headers=auth_header,
+        json={"full_name": "Jane Doe", "profile_url": "https://linkedin.com/in/jane/"},
+    )
+    assert created.status_code == 201
+    sid = created.json()["id"]
+    assert created.json()["status"] == "sourced"
+
+    # same person again (trailing slash normalised) -> refused, no double contact
+    dup = client.post(
+        f"/jobs/{job_id}/sourced", headers=auth_header,
+        json={"full_name": "Jane D", "profile_url": "https://linkedin.com/in/jane"},
+    )
+    assert dup.status_code == 409
+
+    # mark contacted -> timestamp recorded
+    upd = client.patch(
+        f"/jobs/sourced/{sid}", headers=auth_header,
+        json={"status": "contacted", "outreach_tone": "warm"},
+    )
+    assert upd.status_code == 200
+    assert upd.json()["status"] == "contacted"
+    assert upd.json()["contacted_at"] is not None
+
+    listed = client.get(f"/jobs/{job_id}/sourced", headers=auth_header).json()
+    assert len(listed) == 1 and listed[0]["outreach_tone"] == "warm"
+
+
+def test_import_profile_marks_sourced_imported(client, auth_header, monkeypatch):
+    from app.routers import jobs as jobs_router
+
+    monkeypatch.setattr(jobs_router, "enqueue_application_step", lambda *a, **k: None)
+    job_id = _seed_job(client)
+    sid = client.post(
+        f"/jobs/{job_id}/sourced", headers=auth_header,
+        json={"full_name": "Sam", "profile_url": "https://linkedin.com/in/sam"},
+    ).json()["id"]
+
+    resp = client.post(
+        f"/jobs/{job_id}/import-profile", headers=auth_header,
+        json={"raw_text": "Sam — Python engineer", "full_name": "Sam", "sourced_id": sid},
+    )
+    assert resp.status_code == 201
+    app_id = resp.json()["application_id"]
+
+    listed = client.get(f"/jobs/{job_id}/sourced", headers=auth_header).json()
+    assert listed[0]["status"] == "imported"
+    assert listed[0]["application_id"] == app_id

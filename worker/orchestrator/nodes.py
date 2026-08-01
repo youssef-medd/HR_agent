@@ -14,7 +14,7 @@ work goes through `orchestrator.gates`.
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, TypedDict
 
 from app.agents.onboarder import OnboardingError, generate_onboarding_kit
@@ -22,6 +22,7 @@ from app.models.application import Application
 from app.models.application_event import ApplicationEvent
 from app.models.job import Job
 from langgraph.types import interrupt
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orchestrator.agents.masking import mask_cv
@@ -718,4 +719,45 @@ def onboarding_node(db: Session, state: NodeState) -> NodeState:
 
     if app_row is not None:
         app_row.payload = {**app_row.payload, "onboarding": kit}
+    _persist_onboarding_tasks(db, app_id, kit)
     return _advance(db, state, State.ONBOARDING, "onboarding")
+
+
+def _persist_onboarding_tasks(db: Session, application_id: int, kit: dict[str, Any]) -> None:
+    """Create tracked onboarding_tasks rows from the generated kit (idempotent).
+
+    Documents get a due date (default 7 days) so the reminder/escalation beat job
+    can chase them to 100%; checklist items become account/equipment tasks and
+    the week-one plan becomes agenda items."""
+    from app.models.onboarding_task import OnboardingTask
+
+    existing = db.scalar(
+        select(func.count()).select_from(OnboardingTask).where(
+            OnboardingTask.application_id == application_id
+        )
+    )
+    if existing:
+        return  # already materialised on a prior run
+
+    days = int(os.environ.get("ONBOARDING_DOC_DUE_DAYS", "7"))
+    due = datetime.now(UTC) + timedelta(days=days)
+    rows: list[OnboardingTask] = []
+    for doc in kit.get("documents") or []:
+        rows.append(OnboardingTask(
+            application_id=application_id, category="document", label=str(doc),
+            status="pending", due_at=due,
+        ))
+    for item in kit.get("checklist") or []:
+        low = str(item).lower()
+        category = "equipment" if any(w in low for w in ("laptop", "hardware", "equipment", "device")) else "account"
+        rows.append(OnboardingTask(
+            application_id=application_id, category=category, label=str(item), status="pending",
+        ))
+    for plan in kit.get("week_one_plan") or []:
+        label = f"{plan.get('when', '')}: {plan.get('task', '')}".strip(": ")
+        rows.append(OnboardingTask(
+            application_id=application_id, category="agenda", label=label or "Agenda item",
+            status="pending",
+        ))
+    db.add_all(rows)
+    db.commit()

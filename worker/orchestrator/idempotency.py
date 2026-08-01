@@ -20,11 +20,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from app.models.idempotency_ledger import IdempotencyLedger
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-
-from app.models.idempotency_ledger import IdempotencyLedger
 
 
 class ConcurrentAttempt(RuntimeError):

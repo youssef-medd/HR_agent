@@ -11,15 +11,14 @@ Slice-1 skeleton) fires exactly once per application.
 
 from __future__ import annotations
 
-from sqlalchemy import select
-
 from app.models.application import Application
 from app.models.needs_attention import NeedsAttention
+from sqlalchemy import select
+
 from orchestrator.agents.parser import CVData
 from orchestrator.checkpointer import memory_saver
 from orchestrator.graph import build_graph
 from orchestrator.side_effects import _sent_log_reset, _sent_log_snapshot
-
 
 BATCH = 50
 

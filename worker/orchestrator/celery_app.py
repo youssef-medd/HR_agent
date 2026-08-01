@@ -64,4 +64,9 @@ celery.conf.beat_schedule = {
         "task": "orchestrator.weekly_admin_digest",
         "schedule": float(os.environ.get("DIGEST_POLL_SECONDS", "604800")),
     },
+    # A8 — chase onboarding documents: remind, then escalate to HR.
+    "process-onboarding-docs": {
+        "task": "orchestrator.process_onboarding_docs",
+        "schedule": float(os.environ.get("ONBOARDING_POLL_SECONDS", "43200")),
+    },
 }

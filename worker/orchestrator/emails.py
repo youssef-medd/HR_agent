@@ -15,10 +15,53 @@ un-succeeded and can be retried.
 from __future__ import annotations
 
 import os
+import re
 import smtplib
 from email.message import EmailMessage
 from email.utils import make_msgid
 from urllib.parse import quote
+
+from app.gateway import llm_call
+
+_PERSONALIZE_SYSTEM = (
+    "You write ONE short, warm, professional opening sentence (at most two "
+    "sentences) for a recruitment {kind} message to a candidate for the '{title}' "
+    "role, in {lang}. Rules: no new facts, no promises, no salary, no dates, no "
+    "company-specific claims — only a human, considerate tone. Plain text only, "
+    "no greeting, no signature."
+)
+
+
+def _cap_sentences(text: str, limit: int = 2) -> str:
+    """Guardrail: keep at most `limit` sentences of a personalization slot."""
+    parts = re.split(r"(?<=[.!?])\s+", text.strip())
+    return " ".join(p for p in parts[:limit] if p).strip()
+
+
+def personalize_opener(
+    kind: str, title: str, lang: str | None = None, *, user_id: str | None = None
+) -> str:
+    """A7 personalization slot: a bounded, LLM-written opening line.
+
+    Best-effort — returns "" on any failure so a message is never blocked, and
+    the output is hard-capped to two sentences (spec §A7 'max 2 phrases')."""
+    from orchestrator.emails import normalize_lang  # local: defined below
+
+    lang_name = {"en": "English", "fr": "French", "ar": "Arabic"}.get(normalize_lang(lang), "English")
+    system = _PERSONALIZE_SYSTEM.format(kind=kind, title=title or "the role", lang=lang_name)
+    try:
+        out = llm_call(
+            profile="extractor",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": f"Write the opening line for a {kind} message."},
+            ],
+            user_id=user_id,
+            metadata={"agent": "A7", "prompt_version": "personalize@v1", "kind": kind},
+        )
+        return _cap_sentences(str(out or "").strip())
+    except Exception:  # noqa: BLE001 — personalization must never block a send
+        return ""
 
 
 def portal_link(email: str, application_id: int) -> str:
@@ -96,13 +139,21 @@ def _smtp_configured() -> bool:
     return bool(os.environ.get("SMTP_USER") and os.environ.get("SMTP_PASS"))
 
 
-def render_email(kind: str, *, name: str | None = None, lang: str | None = None) -> tuple[str, str]:
-    """Render (subject, body) for a template kind in the candidate's language."""
+def render_email(
+    kind: str, *, name: str | None = None, lang: str | None = None, personal: str = ""
+) -> tuple[str, str]:
+    """Render (subject, body) for a template kind in the candidate's language.
+
+    `personal` is A7's bounded LLM opener; when present it is inserted as the
+    first paragraph after the greeting."""
     base = kind.split("@", 1)[0]
     table = _TEMPLATES_BY_LANG[normalize_lang(lang)]
     subject, body = table.get(base) or table["confirmation"]
     greeting = f" {name}" if name else ""
-    return subject, body.format(name=greeting)
+    rendered = body.format(name=greeting)
+    if personal:
+        rendered = rendered.replace("\n\n", f"\n\n{personal}\n\n", 1)
+    return subject, rendered
 
 
 def send_email(
