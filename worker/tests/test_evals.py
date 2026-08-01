@@ -66,3 +66,106 @@ def test_bias_probe_equal_and_unequal():
         lambda cv, jd: 40.0 if cv.get("g") == "f" else 60.0,  # identity leaks
     )
     assert bad["passed"] is False
+
+
+# --- A5 scripted-dialogue eval ------------------------------------------------
+
+from orchestrator.agents.prescreen import (  # noqa: E402
+    AnswerInterpretation,
+    ConsentInterpretation,
+    SlotCoverage,
+)
+from orchestrator.evals import run_dialogue, run_dialogue_eval  # noqa: E402
+
+
+def _fns(*, consent=True, sensitive_on=None, answered_on=None, covers=None):
+    def consent_fn(t):
+        return ConsentInterpretation(consent=consent)
+
+    def answer_fn(q, r):
+        if sensitive_on and sensitive_on in r:
+            return AnswerInterpretation(answer=r, answered=True, sensitive=True)
+        if answered_on is not None and answered_on in r:
+            return AnswerInterpretation(answer="", answered=False)
+        return AnswerInterpretation(answer=r, answered=True)
+
+    def coverage_fn(q, prior):
+        if covers and covers in q:
+            return SlotCoverage(covered=True, answer="from earlier")
+        return SlotCoverage()
+
+    return consent_fn, answer_fn, coverage_fn
+
+
+def test_run_dialogue_complete():
+    c, a, cov = _fns()
+    out = run_dialogue(
+        {"id": "d", "questions": ["Q1", "Q2"], "consent_reply": "yes", "replies": ["a1", "a2"]},
+        consent_fn=c, answer_fn=a, coverage_fn=cov,
+    )
+    assert out["outcome"] == "complete"
+    assert [x["a"] for x in out["answers"]] == ["a1", "a2"]
+
+
+def test_run_dialogue_no_consent_stops_before_questions():
+    c, a, cov = _fns(consent=False)
+    out = run_dialogue(
+        {"id": "d", "questions": ["Q1"], "consent_reply": "no", "replies": ["a1"]},
+        consent_fn=c, answer_fn=a, coverage_fn=cov,
+    )
+    assert out["outcome"] == "no_consent" and out["answers"] == []
+
+
+def test_run_dialogue_sensitive_hands_off():
+    c, a, cov = _fns(sensitive_on="lawyer")
+    out = run_dialogue(
+        {"id": "d", "questions": ["Q1", "Q2"], "consent_reply": "yes", "replies": ["my lawyer said no"]},
+        consent_fn=c, answer_fn=a, coverage_fn=cov,
+    )
+    assert out["outcome"] == "handoff"
+
+
+def test_run_dialogue_reasks_once_then_gives_up():
+    c, a, cov = _fns(answered_on="hmm")
+    ok = run_dialogue(
+        {"id": "d", "questions": ["Q1"], "consent_reply": "yes", "replies": ["hmm", "6 years"]},
+        consent_fn=c, answer_fn=a, coverage_fn=cov,
+    )
+    assert ok["outcome"] == "complete"  # recovered on the single re-ask
+
+    bad = run_dialogue(
+        {"id": "d", "questions": ["Q1"], "consent_reply": "yes", "replies": ["hmm", "hmm"]},
+        consent_fn=c, answer_fn=a, coverage_fn=cov,
+    )
+    assert bad["outcome"] == "unclear"  # never argues past one re-ask
+
+
+def test_run_dialogue_skips_covered_slot():
+    """One reply covering two slots must not need a second reply."""
+    c, a, cov = _fns(covers="Notice")
+    out = run_dialogue(
+        {"id": "d", "questions": ["Experience?", "Notice period?"], "consent_reply": "yes",
+         "replies": ["6 years, can start in a month"]},
+        consent_fn=c, answer_fn=a, coverage_fn=cov,
+    )
+    assert out["outcome"] == "complete"
+    assert out["asked"] == 1  # only one question actually asked
+    assert out["answers"][1]["auto"] is True
+
+
+def test_dialogue_eval_scores_against_target():
+    c, a, cov = _fns()
+    dialogues = [
+        {"id": f"d{i}", "lang": "en", "expect": "complete", "questions": ["Q1"],
+         "consent_reply": "yes", "replies": ["a1"]}
+        for i in range(4)
+    ]
+    # one that legitimately cannot complete (no reply available)
+    dialogues.append({"id": "short", "lang": "fr", "expect": "complete", "questions": ["Q1"],
+                      "consent_reply": "yes", "replies": []})
+    report = run_dialogue_eval(dialogues, consent_fn=c, answer_fn=a, coverage_fn=cov)
+
+    assert report["n"] == 5 and report["completed"] == 4
+    assert report["completion_rate"] == 0.8
+    assert report["passed"] is True  # exactly at the 80% target
+    assert report["by_language"]["en"]["complete"] == 4

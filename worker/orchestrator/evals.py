@@ -31,9 +31,14 @@ ScoreFn = Callable[[dict[str, Any], str], float]
 
 SPEARMAN_TARGET = 0.75
 STDDEV_TARGET = 5.0
+# Spec §A5 AC: 80% of the scripted dialogues complete without human help.
+DIALOGUE_COMPLETION_TARGET = 0.80
 
 _ROOT = Path(__file__).resolve().parents[2]
 _GOLDEN = Path(os.environ.get("EVALS_GOLDEN") or _ROOT / "evals" / "golden" / "fixtures.json")
+_DIALOGUES = Path(
+    os.environ.get("EVALS_DIALOGUES") or _ROOT / "evals" / "golden" / "dialogues.json"
+)
 _REPORTS = Path(os.environ.get("EVALS_REPORTS") or _ROOT / "evals" / "reports")
 
 
@@ -124,6 +129,201 @@ def run_bias_probe(pairs: list[dict[str, Any]], score_fn: ScoreFn) -> dict:
     return {"passed": ok, "pairs": results}
 
 
+# --- A5 scripted dialogue eval ----------------------------------------------
+
+
+def run_dialogue(
+    dialogue: dict[str, Any], *, consent_fn, answer_fn, coverage_fn
+) -> dict[str, Any]:
+    """Replay one scripted dialogue through the A5 rules.
+
+    Mirrors `nodes.prescreen_node`: consent first, skip already-covered slots,
+    one clarification re-ask, sensitive reply -> handover. Returns the outcome
+    (`complete` | `no_consent` | `handoff` | `unclear` | `ran_out`) plus the
+    slots that were filled.
+    """
+    questions: list[str] = list(dialogue.get("questions") or [])
+    replies: list[str] = list(dialogue.get("replies") or [])
+
+    if not consent_fn(dialogue.get("consent_reply", "")).consent:
+        return {"id": dialogue.get("id"), "outcome": "no_consent", "answers": [], "asked": 0}
+
+    answers: list[dict[str, Any]] = []
+    # Raw replies verbatim — the coverage check needs what was actually said,
+    # not the answer normalised to a single question (mirrors prescreen_node).
+    raw_qa: list[dict[str, Any]] = []
+    asked = 0
+    ri = 0
+    for question in questions:
+        # Slot-filling: skip what an earlier reply already answered.
+        if raw_qa:
+            cov = coverage_fn(question, raw_qa)
+            if cov.covered and cov.answer:
+                answers.append({"q": question, "a": cov.answer, "auto": True})
+                continue
+
+        if ri >= len(replies):
+            return {
+                "id": dialogue.get("id"), "outcome": "ran_out",
+                "answers": answers, "asked": asked,
+            }
+        raw_qa.append({"q": question, "a": replies[ri]})
+        interp = answer_fn(question, replies[ri])
+        ri += 1
+        asked += 1
+
+        if interp.sensitive:
+            return {
+                "id": dialogue.get("id"), "outcome": "handoff",
+                "answers": answers, "asked": asked,
+            }
+
+        # One clarification re-ask, exactly as the node does.
+        if not interp.answered:
+            if ri >= len(replies):
+                return {
+                    "id": dialogue.get("id"), "outcome": "unclear",
+                    "answers": answers, "asked": asked,
+                }
+            raw_qa.append({"q": question, "a": replies[ri]})
+            interp = answer_fn(question, replies[ri])
+            ri += 1
+            asked += 1
+            if interp.sensitive:
+                return {
+                    "id": dialogue.get("id"), "outcome": "handoff",
+                    "answers": answers, "asked": asked,
+                }
+            if not interp.answered:
+                return {
+                    "id": dialogue.get("id"), "outcome": "unclear",
+                    "answers": answers, "asked": asked,
+                }
+
+        answers.append({"q": question, "a": interp.answer})
+
+    return {"id": dialogue.get("id"), "outcome": "complete", "answers": answers, "asked": asked}
+
+
+def run_dialogue_eval(
+    dialogues: list[dict[str, Any]], *, consent_fn, answer_fn, coverage_fn
+) -> dict[str, Any]:
+    """Run every scripted dialogue and score against the §A5 acceptance criteria.
+
+    Measures the completion rate over the dialogues expected to complete, and
+    checks that a completed dialogue stored every slot.
+    """
+    results: list[dict[str, Any]] = []
+    for d in dialogues:
+        got = run_dialogue(d, consent_fn=consent_fn, answer_fn=answer_fn, coverage_fn=coverage_fn)
+        expected = d.get("expect", "complete")
+        n_q = len(d.get("questions") or [])
+        slots_ok = len(got["answers"]) == n_q if got["outcome"] == "complete" else True
+        results.append({
+            **got,
+            "lang": d.get("lang", ""),
+            "expected": expected,
+            "matched": got["outcome"] == expected,
+            "slots_stored": f"{len(got['answers'])}/{n_q}",
+            "slots_ok": slots_ok,
+        })
+
+    expect_complete = [r for r in results if r["expected"] == "complete"]
+    completed = [r for r in expect_complete if r["outcome"] == "complete"]
+    rate = len(completed) / len(expect_complete) if expect_complete else 0.0
+    controls = [r for r in results if r["expected"] != "complete"]
+
+    all_slots_ok = all(r["slots_ok"] for r in results)
+    controls_ok = all(r["matched"] for r in controls)
+    passed = rate >= DIALOGUE_COMPLETION_TARGET and all_slots_ok and controls_ok
+
+    by_lang: dict[str, dict[str, int]] = {}
+    for r in expect_complete:
+        b = by_lang.setdefault(r["lang"] or "??", {"total": 0, "complete": 0})
+        b["total"] += 1
+        if r["outcome"] == "complete":
+            b["complete"] += 1
+
+    return {
+        "n": len(expect_complete),
+        "completed": len(completed),
+        "completion_rate": round(rate, 4),
+        "completion_target": DIALOGUE_COMPLETION_TARGET,
+        "all_slots_stored": all_slots_ok,
+        "controls_ok": controls_ok,
+        "by_language": by_lang,
+        "passed": passed,
+        "per_dialogue": [
+            {k: r[k] for k in ("id", "lang", "expected", "outcome", "matched", "slots_stored")}
+            for r in results
+        ],
+    }
+
+
+def _load_dialogues() -> list[dict[str, Any]]:
+    if not _DIALOGUES.exists():
+        raise FileNotFoundError(f"Scripted dialogues not found at {_DIALOGUES}.")
+    return json.loads(_DIALOGUES.read_text(encoding="utf-8")).get("dialogues", [])
+
+
+def _stub_dialogue_fns():
+    """Deterministic offline interpreters so the harness runs without the LLM."""
+    from orchestrator.agents.prescreen import (
+        AnswerInterpretation,
+        ConsentInterpretation,
+        SlotCoverage,
+    )
+
+    yes = ("yes", "yeah", "ok", "sure", "oui", "daccord", "d'accord", "نعم", "go ahead", "confirme")
+    vague = ("hmm", "euh", "dunno", "sais pas", "not sure", "???")
+    sensitive = ("lawyer", "avocat", "discrimination", "harassment")
+
+    def consent_fn(text: str) -> ConsentInterpretation:
+        low = (text or "").lower()
+        agreed = any(w in low for w in yes) and not low.strip().startswith("no")
+        return ConsentInterpretation(consent=agreed)
+
+    def answer_fn(question: str, reply: str) -> AnswerInterpretation:
+        low = (reply or "").lower()
+        if any(w in low for w in sensitive):
+            return AnswerInterpretation(answer=reply, answered=True, sensitive=True)
+        if not reply.strip() or any(low.strip().startswith(v) for v in vague):
+            return AnswerInterpretation(answer="", answered=False)
+        return AnswerInterpretation(answer=reply.strip(), answered=True)
+
+    def coverage_fn(question: str, prior: list[dict]) -> SlotCoverage:
+        # Offline heuristic: a prior reply mentioning a duration covers a
+        # notice/availability question.
+        joined = " ".join(str(p.get("a", "")) for p in prior).lower()
+        wants_notice = any(
+            w in question.lower() for w in ("notice", "préavis", "preavis", "إشعار", "start")
+        )
+        mentions = any(
+            w in joined
+            for w in ("month", "mois", "week", "semaine", "شهر", "start in", "disponible")
+        )
+        if wants_notice and mentions:
+            return SlotCoverage(covered=True, answer="(from earlier reply)")
+        return SlotCoverage()
+
+    return consent_fn, answer_fn, coverage_fn
+
+
+def _live_dialogue_fns():
+    """The real A5 interpreters (LLM gateway)."""
+    from orchestrator.agents.prescreen import (
+        interpret_answer,
+        interpret_consent,
+        slot_already_covered,
+    )
+
+    return (
+        lambda t: interpret_consent(t),
+        lambda q, r: interpret_answer(q, r),
+        lambda q, prior: slot_already_covered(q, prior),
+    )
+
+
 def _load_golden() -> dict:
     if not _GOLDEN.exists():
         raise FileNotFoundError(
@@ -156,11 +356,59 @@ def _judge_score_fn() -> ScoreFn:
     return _fn
 
 
+def _write_report(report: dict[str, Any], prefix: str) -> Path:
+    _REPORTS.mkdir(parents=True, exist_ok=True)
+    out = _REPORTS / f"{prefix}_{datetime.now(UTC):%Y%m%d_%H%M%S}.json"
+    out.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    return out
+
+
+def _rel(path: Path) -> str:
+    return str(path.relative_to(_ROOT) if path.is_relative_to(_ROOT) else path)
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="A4 scoring + bias evaluation")
-    parser.add_argument("--stub", action="store_true", help="offline deterministic scorer")
+    parser = argparse.ArgumentParser(description="A4 scoring/bias + A5 dialogue evaluation")
+    parser.add_argument("--stub", action="store_true", help="offline deterministic interpreters")
     parser.add_argument("--runs", type=int, default=3)
+    parser.add_argument(
+        "--dialogues", action="store_true", help="run the A5 scripted-dialogue eval instead"
+    )
     args = parser.parse_args(argv)
+
+    if args.dialogues:
+        consent_fn, answer_fn, coverage_fn = (
+            _stub_dialogue_fns() if args.stub else _live_dialogue_fns()
+        )
+        result = run_dialogue_eval(
+            _load_dialogues(),
+            consent_fn=consent_fn,
+            answer_fn=answer_fn,
+            coverage_fn=coverage_fn,
+        )
+        report = {
+            "generated_at": datetime.now(UTC).isoformat(),
+            "mode": "stub" if args.stub else "live",
+            "dialogues": result,
+            "passed": result["passed"],
+        }
+        out = _write_report(report, "dialogues")
+        print(
+            json.dumps(
+                {k: result[k] for k in (
+                    "n", "completed", "completion_rate", "completion_target",
+                    "all_slots_stored", "controls_ok", "by_language", "passed",
+                )},
+                indent=2,
+            )
+        )
+        failures = [d for d in result["per_dialogue"] if not d["matched"]]
+        if failures:
+            print("\nnot matching expectation:")
+            for f in failures:
+                print(f"  {f['id']} ({f['lang']}): expected {f['expected']}, got {f['outcome']}")
+        print(f"report -> {_rel(out)}")
+        return 0 if result["passed"] else 1
 
     golden = _load_golden()
     score_fn = _stub_score_fn() if args.stub else _judge_score_fn()
@@ -174,14 +422,11 @@ def main(argv: list[str] | None = None) -> int:
         "bias": bias,
         "passed": scoring["passed"] and bias["passed"],
     }
-
-    _REPORTS.mkdir(parents=True, exist_ok=True)
-    out = _REPORTS / f"eval_{datetime.now(UTC):%Y%m%d_%H%M%S}.json"
-    out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    out = _write_report(report, "eval")
 
     print(json.dumps(report["scoring"], indent=2))
     print(f"bias probe: {'PASS' if bias['passed'] else 'FAIL'}")
-    print(f"report -> {out.relative_to(_ROOT) if out.is_relative_to(_ROOT) else out}")
+    print(f"report -> {_rel(out)}")
     return 0 if report["passed"] else 1
 
 

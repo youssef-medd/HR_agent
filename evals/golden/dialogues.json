@@ -1,0 +1,181 @@
+{
+  "_comment": "A5 scripted pre-screening dialogues (spec AC: 80% of 20 complete without human help, incl. FR/AR, typos, digressions). `expect` is the outcome the run should reach: complete | handoff | no_consent. The 20 'complete' dialogues are what the AC percentage is measured on; the control dialogues verify the escape hatches fire.",
+  "dialogues": [
+    {
+      "id": "en-happy",
+      "lang": "en",
+      "expect": "complete",
+      "questions": ["How many years of relevant experience do you have?", "What is your notice period?", "What are your salary expectations?"],
+      "consent_reply": "Yes, happy to continue.",
+      "replies": ["I have 6 years of backend experience.", "One month notice.", "Around 55k EUR."]
+    },
+    {
+      "id": "en-typos",
+      "lang": "en",
+      "expect": "complete",
+      "questions": ["How many years of relevant experience do you have?", "What is your notice period?", "Can you work from Tunis?"],
+      "consent_reply": "yeah sure go ahed",
+      "replies": ["arround 4 yrs mostly pyhton", "notice preiod is 2 wks", "yes i live in tunis alredy"]
+    },
+    {
+      "id": "en-digression",
+      "lang": "en",
+      "expect": "complete",
+      "questions": ["How many years of relevant experience do you have?", "What is your notice period?"],
+      "consent_reply": "Sure — by the way, how big is the team? Anyway, yes let's go.",
+      "replies": ["Well, I started in 2018 at a startup that later pivoted to fintech, which was fun. So about 7 years total.", "I'd need to give one month, though I could maybe negotiate."]
+    },
+    {
+      "id": "en-combined-slots",
+      "lang": "en",
+      "expect": "complete",
+      "questions": ["How many years of relevant experience do you have?", "What is your notice period?"],
+      "consent_reply": "yes",
+      "replies": ["6 years of experience, and I can start in one month."]
+    },
+    {
+      "id": "en-terse",
+      "lang": "en",
+      "expect": "complete",
+      "questions": ["How many years of relevant experience do you have?", "What is your notice period?", "What are your salary expectations?"],
+      "consent_reply": "ok",
+      "replies": ["5", "2 weeks", "50k"]
+    },
+    {
+      "id": "en-unclear-then-clear",
+      "lang": "en",
+      "expect": "complete",
+      "questions": ["What is your notice period?", "What are your salary expectations?"],
+      "consent_reply": "yes",
+      "replies": ["hmm", "Two months notice.", "About 60k."]
+    },
+    {
+      "id": "en-numbers",
+      "lang": "en",
+      "expect": "complete",
+      "questions": ["What is your notice period?", "What are your salary expectations?"],
+      "consent_reply": "yes please",
+      "replies": ["30 days", "55-60k depending on the package"]
+    },
+    {
+      "id": "en-emoji",
+      "lang": "en",
+      "expect": "complete",
+      "questions": ["How many years of relevant experience do you have?", "Can you relocate?"],
+      "consent_reply": "yes 👍",
+      "replies": ["about 8 years 🚀", "yes, happy to relocate 🙂"]
+    },
+    {
+      "id": "en-verbose",
+      "lang": "en",
+      "expect": "complete",
+      "questions": ["How many years of relevant experience do you have?", "What is your notice period?"],
+      "consent_reply": "Yes of course, I'm very interested in this role and happy to answer.",
+      "replies": ["I've been working professionally since 2016, first as a junior developer, then moving into backend engineering around 2019, so roughly nine years in total with about six of those focused on backend.", "My current contract requires three months of notice unfortunately."]
+    },
+    {
+      "id": "en-mixed-lang",
+      "lang": "en",
+      "expect": "complete",
+      "questions": ["How many years of relevant experience do you have?", "What is your notice period?"],
+      "consent_reply": "oui yes go ahead",
+      "replies": ["environ 5 ans, mostly backend", "one month, un mois"]
+    },
+    {
+      "id": "fr-happy",
+      "lang": "fr",
+      "expect": "complete",
+      "questions": ["Combien d'années d'expérience pertinente avez-vous ?", "Quel est votre préavis ?", "Quelles sont vos prétentions salariales ?"],
+      "consent_reply": "Oui, je suis d'accord.",
+      "replies": ["J'ai 7 ans d'expérience en développement backend.", "Mon préavis est de deux mois.", "Environ 50 000 euros brut."]
+    },
+    {
+      "id": "fr-typos",
+      "lang": "fr",
+      "expect": "complete",
+      "questions": ["Combien d'années d'expérience pertinente avez-vous ?", "Quel est votre préavis ?"],
+      "consent_reply": "oui daccord",
+      "replies": ["jai envrion 4 ans dexperiance", "preavis de 1 mois"]
+    },
+    {
+      "id": "fr-digression",
+      "lang": "fr",
+      "expect": "complete",
+      "questions": ["Combien d'années d'expérience pertinente avez-vous ?", "Êtes-vous mobile sur Tunis ?"],
+      "consent_reply": "Oui bien sûr. Au fait, le poste est-il en télétravail ?",
+      "replies": ["Alors, j'ai commencé en 2017 dans une agence web, puis j'ai rejoint une scale-up. Au total ça fait environ 8 ans.", "Oui, j'habite déjà à Tunis donc aucun problème."]
+    },
+    {
+      "id": "fr-combined-slots",
+      "lang": "fr",
+      "expect": "complete",
+      "questions": ["Combien d'années d'expérience pertinente avez-vous ?", "Quel est votre préavis ?"],
+      "consent_reply": "oui",
+      "replies": ["5 ans d'expérience, et je suis disponible dans un mois."]
+    },
+    {
+      "id": "fr-formal",
+      "lang": "fr",
+      "expect": "complete",
+      "questions": ["Quel est votre préavis ?", "Quelles sont vos prétentions salariales ?"],
+      "consent_reply": "Je vous confirme mon accord pour poursuivre.",
+      "replies": ["Je suis tenu par un préavis de trois mois.", "Mes prétentions se situent autour de 60 000 euros."]
+    },
+    {
+      "id": "fr-unclear-then-clear",
+      "lang": "fr",
+      "expect": "complete",
+      "questions": ["Quel est votre préavis ?", "Êtes-vous mobile ?"],
+      "consent_reply": "oui",
+      "replies": ["euh je sais pas trop", "Un mois de préavis.", "Oui je peux me déplacer."]
+    },
+    {
+      "id": "ar-happy",
+      "lang": "ar",
+      "expect": "complete",
+      "questions": ["كم عدد سنوات خبرتك ذات الصلة؟", "ما هي مدة الإشعار لديك؟"],
+      "consent_reply": "نعم، أوافق على المتابعة.",
+      "replies": ["لدي ست سنوات من الخبرة في تطوير البرمجيات.", "مدة الإشعار شهر واحد."]
+    },
+    {
+      "id": "ar-short",
+      "lang": "ar",
+      "expect": "complete",
+      "questions": ["كم عدد سنوات خبرتك ذات الصلة؟", "ما هو الراتب المتوقع؟"],
+      "consent_reply": "نعم",
+      "replies": ["خمس سنوات", "حوالي 50 ألف"]
+    },
+    {
+      "id": "ar-digression",
+      "lang": "ar",
+      "expect": "complete",
+      "questions": ["كم عدد سنوات خبرتك ذات الصلة؟", "هل يمكنك العمل من تونس؟"],
+      "consent_reply": "نعم بالتأكيد، وهل الوظيفة عن بعد؟",
+      "replies": ["بدأت العمل في 2018 في شركة ناشئة ثم انتقلت إلى شركة أكبر، أي حوالي سبع سنوات.", "نعم، أنا أقيم في تونس بالفعل."]
+    },
+    {
+      "id": "ar-combined-slots",
+      "lang": "ar",
+      "expect": "complete",
+      "questions": ["كم عدد سنوات خبرتك ذات الصلة؟", "ما هي مدة الإشعار لديك؟"],
+      "consent_reply": "نعم",
+      "replies": ["لدي أربع سنوات خبرة ويمكنني البدء بعد شهر."]
+    },
+    {
+      "id": "control-sensitive-handoff",
+      "lang": "en",
+      "expect": "handoff",
+      "questions": ["How many years of relevant experience do you have?", "What is your notice period?"],
+      "consent_reply": "yes",
+      "replies": ["My lawyer advised me not to answer that until we discuss the discrimination complaint."]
+    },
+    {
+      "id": "control-no-consent",
+      "lang": "en",
+      "expect": "no_consent",
+      "questions": ["How many years of relevant experience do you have?"],
+      "consent_reply": "No thanks, I'd rather not.",
+      "replies": []
+    }
+  ]
+}

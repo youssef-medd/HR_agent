@@ -23,6 +23,17 @@ evals-judge:
 	docker compose exec -T -e EVALS_GOLDEN=/evals/golden/fixtures.json -e EVALS_REPORTS=/evals/reports \
 		worker python -m orchestrator.evals
 
+# A5 scripted-dialogue eval (spec AC: 80% of 20 complete without human help).
+# Offline heuristics — exercises the harness itself without the LLM.
+evals-dialogues:
+	docker compose exec -T -e EVALS_DIALOGUES=/evals/golden/dialogues.json -e EVALS_REPORTS=/evals/reports \
+		worker python -m orchestrator.evals --dialogues --stub
+
+# The real measurement: drives the live A5 interpreters (needs provider keys).
+evals-dialogues-live:
+	docker compose exec -T -e EVALS_DIALOGUES=/evals/golden/dialogues.json -e EVALS_REPORTS=/evals/reports \
+		worker python -m orchestrator.evals --dialogues
+
 lint:
 	docker compose exec -T api ruff check app
 	docker compose exec -T worker sh -c 'cd /w && ruff check orchestrator'

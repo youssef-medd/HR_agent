@@ -487,6 +487,10 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
     # branches are pure functions of the deterministic reply interpretation, so
     # the interrupt sequence still replays identically.
     answers: list[dict[str, Any]] = []
+    # Raw candidate replies, kept verbatim: the slot-coverage check must see what
+    # the candidate actually said, not the answer normalised to one question
+    # ("6 years and I can start in a month" -> "6 years" loses the notice period).
+    raw_qa: list[dict[str, Any]] = []
     flags: list[str] = []
 
     def _ask(step: str, prompt: str) -> str:
@@ -501,8 +505,8 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
         # Slot-filling (spec §A5): skip a question the candidate has already
         # answered. Deterministic and a pure function of the accumulated answers,
         # so the interrupt sequence still replays identically.
-        if answers:
-            coverage = slot_already_covered(question, answers, user_id=str(app_id))
+        if raw_qa:
+            coverage = slot_already_covered(question, raw_qa, user_id=str(app_id))
             if coverage.covered and coverage.answer:
                 answered_at = (
                     prior_answers[i]["at"]
@@ -518,6 +522,7 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
                 continue
 
         reply = _ask(f"prescreen_q{i}", question)
+        raw_qa.append({"q": question, "a": reply})
         try:
             interp = interpret_answer(question, reply, user_id=str(app_id))
             # One clarification re-ask when the reply does not answer the question.
@@ -526,6 +531,7 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
                     f"prescreen_q{i}_clarify",
                     "Sorry, I didn't quite catch that — could you answer briefly?",
                 )
+                raw_qa.append({"q": question, "a": reply2})
                 interp = interpret_answer(question, reply2, user_id=str(app_id))
         except PrescreenError as exc:
             block["answers"] = answers
