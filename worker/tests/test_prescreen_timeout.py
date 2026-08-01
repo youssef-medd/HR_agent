@@ -19,7 +19,13 @@ def _stub_transports(monkeypatch):
     side_effects._sent_log_reset()
 
 
-def _seed(db, *, updated_h_ago, ref="c@x.io", phone=None, block=None):
+def _seed(db, *, updated_h_ago, ref="c@x.io", phone=None, block=None, now=None):
+    """Seed a PRESCREENING application idle for `updated_h_ago` hours.
+
+    `now` is the reference clock the test drives the job with — idleness is
+    measured from it, so the fixture never mixes real and simulated time.
+    """
+    now = now or datetime.now(UTC)
     payload = {"prescreen": block or {}}
     if phone:
         payload["phone"] = phone
@@ -28,7 +34,7 @@ def _seed(db, *, updated_h_ago, ref="c@x.io", phone=None, block=None):
     db.commit()
     db.refresh(row)
     # Backdate updated_at to simulate idleness (sqlite lets us set it directly).
-    row.updated_at = datetime.now(UTC) - timedelta(hours=updated_h_ago)
+    row.updated_at = now - timedelta(hours=updated_h_ago)
     db.commit()
     return row.id
 
@@ -51,10 +57,10 @@ def test_not_touched_before_48h(db):
 
 
 def test_marked_incomplete_after_second_window(db):
-    now = datetime(2026, 7, 30, 12, 0, tzinfo=UTC)
+    now = datetime.now(UTC)
     # reminder already sent 50h ago, idle well past the first window
     block = {"reminder_at": (now - timedelta(hours=50)).isoformat()}
-    app_id = _seed(db, updated_h_ago=100, block=block)
+    app_id = _seed(db, updated_h_ago=100, block=block, now=now)
     out = _process_stale_prescreens(db, now=now)
     assert out["incomplete"] == [app_id]
     row = db.get(Application, app_id)
