@@ -7,11 +7,14 @@ publication (job boards) passes through a human gate later (spec §7); for now
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 import os
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -24,7 +27,12 @@ from app.agents.job_intake import (
     converse_intake,
     structure_job,
 )
-from app.agents.sourcer import SourcingKit, generate_sourcing_kit
+from app.agents.sourcer import (
+    OutreachDraft,
+    SourcingKit,
+    generate_personal_outreach,
+    generate_sourcing_kit,
+)
 from app.agents.taxonomy import normalize_skills
 from app.db import get_db
 from app.models.application import Application
@@ -526,6 +534,47 @@ def job_spec_override(
     return body
 
 
+class OutreachIn(BaseModel):
+    """Either paste the profile text, or point at an already-imported application."""
+
+    profile_text: str | None = None
+    application_id: int | None = None
+
+
+@router.post("/{job_id}/outreach", response_model=list[OutreachDraft])
+def personal_outreach(
+    job_id: int,
+    body: OutreachIn,
+    user: Annotated[User, Depends(require_role("admin", "recruiter"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[OutreachDraft]:
+    """A2 — three outreach drafts personalised to ONE candidate (spec §A2).
+
+    Uses the pasted profile, or the parsed CV of an already-imported
+    application. Sending stays manual."""
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    text = (body.profile_text or "").strip()
+    if not text and body.application_id is not None:
+        app_row = db.get(Application, body.application_id)
+        if app_row is not None and isinstance(app_row.payload, dict):
+            payload = app_row.payload
+            text = str(payload.get("raw_text") or payload.get("cv_text") or "")
+            if not text and isinstance(payload.get("cv"), dict):
+                text = json.dumps(payload["cv"], ensure_ascii=False)
+    if not text:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Provide profile_text or an application_id with a parsed profile",
+        )
+
+    return generate_personal_outreach(
+        title=job.title, profile_text=text, spec=job.spec, user_id=str(user.id)
+    )
+
+
 class ProfileImport(BaseModel):
     raw_text: str = Field(min_length=1, max_length=40000)
     full_name: str | None = None
@@ -585,3 +634,160 @@ def import_profile(
 
     enqueue_application_step(row.id)
     return ImportedApplication(application_id=row.id, state=row.state)
+
+
+def _create_sourced_application(
+    db: Session, job: Job, *, raw_text: str, full_name: str | None, candidate_ref: str | None
+) -> Application:
+    """Shared A2 import: a sourced profile becomes a RECEIVED application that
+    flows through A3 parse -> A4 score exactly like an emailed CV."""
+    row = Application(
+        job_id=job.id,
+        candidate_ref=candidate_ref or full_name or "sourced-profile",
+        state="RECEIVED",
+        payload={
+            "cv_text": raw_text,
+            "source": "linkedin_assist",
+            "applicant_name": full_name or "",
+            **({"jd_text": job.description} if job.description else {}),
+        },
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.post(
+    "/{job_id}/import-profile/upload",
+    response_model=ImportedApplication,
+    status_code=status.HTTP_201_CREATED,
+)
+async def import_profile_upload(
+    job_id: int,
+    user: Annotated[User, Depends(require_role("admin", "recruiter"))],
+    db: Annotated[Session, Depends(get_db)],
+    file: Annotated[UploadFile, File()],
+    full_name: Annotated[str | None, Form()] = None,
+    candidate_ref: Annotated[str | None, Form()] = None,
+    sourced_id: Annotated[int | None, Form()] = None,
+) -> ImportedApplication:
+    """A2 — import an exported profile FILE (LinkedIn 'Save to PDF', DOCX, TXT).
+
+    Same pipeline as the paste box: text is extracted, then A3 parses and A4
+    scores it, tagged source=linkedin_assist."""
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    filename = file.filename or "profile"
+    if not filename.lower().endswith(_JD_EXT):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported file type. Allowed: {', '.join(_JD_EXT)}",
+        )
+    data = await file.read()
+    if len(data) > _MAX_JD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File exceeds {_MAX_JD_BYTES // (1024 * 1024)} MB",
+        )
+    try:
+        text = _extract_jd_text(filename, data)
+    except Exception as exc:  # noqa: BLE001 — clean 422 for the UI
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Could not read {filename}: {exc}",
+        ) from exc
+    if not text.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No text could be extracted (is it a scanned/image PDF?)",
+        )
+
+    row = _create_sourced_application(
+        db, job, raw_text=text, full_name=full_name, candidate_ref=candidate_ref
+    )
+    if sourced_id is not None:
+        sourced = db.get(SourcedProfile, sourced_id)
+        if sourced is not None and sourced.job_id == job_id:
+            sourced.status = "imported"
+            sourced.application_id = row.id
+            db.commit()
+
+    enqueue_application_step(row.id)
+    return ImportedApplication(application_id=row.id, state=row.state)
+
+
+class CsvImportResult(BaseModel):
+    added: int
+    skipped_duplicates: int
+    ids: list[int]
+
+
+@router.post("/{job_id}/sourced/import-csv", response_model=CsvImportResult)
+async def import_sourced_csv(
+    job_id: int,
+    user: Annotated[User, Depends(require_role("admin", "recruiter"))],
+    db: Annotated[Session, Depends(get_db)],
+    file: Annotated[UploadFile, File()],
+) -> CsvImportResult:
+    """A2 — bulk-add sourced people from a CSV list.
+
+    Recognised columns (case-insensitive): full_name/name, profile_url/url/link,
+    platform, notes. Rows whose profile URL is already sourced for this job are
+    skipped, so re-importing a list never creates a duplicate contact.
+    """
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    if not (file.filename or "").lower().endswith(".csv"):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Expected a .csv file"
+        )
+
+    raw = (await file.read()).decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(raw))
+    if not reader.fieldnames:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="CSV has no header row"
+        )
+    cols = {(c or "").strip().lower(): c for c in reader.fieldnames}
+
+    def pick(row: dict, *names: str) -> str:
+        for n in names:
+            if n in cols and row.get(cols[n]):
+                return str(row[cols[n]]).strip()
+        return ""
+
+    existing = {
+        u
+        for (u,) in db.execute(
+            select(SourcedProfile.profile_url).where(SourcedProfile.job_id == job_id)
+        ).all()
+        if u
+    }
+    added: list[int] = []
+    skipped = 0
+    for raw_row in reader:
+        name = pick(raw_row, "full_name", "name", "nom")
+        url = pick(raw_row, "profile_url", "url", "link", "linkedin").rstrip("/") or None
+        if not name and not url:
+            continue
+        if url and url in existing:
+            skipped += 1
+            continue
+        row = SourcedProfile(
+            job_id=job_id,
+            full_name=name,
+            profile_url=url,
+            platform=pick(raw_row, "platform") or "linkedin",
+            notes=pick(raw_row, "notes") or None,
+        )
+        db.add(row)
+        db.flush()
+        added.append(row.id)
+        if url:
+            existing.add(url)
+    db.commit()
+    return CsvImportResult(added=len(added), skipped_duplicates=skipped, ids=added)

@@ -238,3 +238,102 @@ def test_import_profile_marks_sourced_imported(client, auth_header, monkeypatch)
     listed = client.get(f"/jobs/{job_id}/sourced", headers=auth_header).json()
     assert listed[0]["status"] == "imported"
     assert listed[0]["application_id"] == app_id
+
+
+# --- A2 file/CSV import + per-candidate outreach -----------------------------
+
+
+def test_import_profile_upload_creates_application(client, auth_header, monkeypatch):
+    """Spec §A2: uploaded profile exports flow through parsing + scoring."""
+    from app.models.application import Application
+    from app.routers import jobs as jobs_router
+
+    monkeypatch.setattr(jobs_router, "enqueue_application_step", lambda *a, **k: None)
+    job_id = _seed_job(client)
+
+    resp = client.post(
+        f"/jobs/{job_id}/import-profile/upload", headers=auth_header,
+        data={"full_name": "Jane Doe"},
+        files={"file": ("jane-profile.txt", b"Jane Doe\nSenior Backend Engineer\nPython, Go", "text/plain")},
+    )
+    assert resp.status_code == 201
+    app_id = resp.json()["application_id"]
+
+    from app.db import get_db
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        row = db.get(Application, app_id)
+        assert row.payload["source"] == "linkedin_assist"  # tagged like the paste path
+        assert "Senior Backend Engineer" in row.payload["cv_text"]
+    finally:
+        db.close()
+
+
+def test_import_profile_upload_rejects_bad_type(client, auth_header):
+    job_id = _seed_job(client)
+    resp = client.post(
+        f"/jobs/{job_id}/import-profile/upload", headers=auth_header,
+        files={"file": ("x.exe", b"x", "application/octet-stream")},
+    )
+    assert resp.status_code == 415
+
+
+def test_import_sourced_csv_bulk_and_dedupes(client, auth_header):
+    job_id = _seed_job(client)
+    csv_bytes = (
+        b"name,profile_url,notes\n"
+        b"Jane Doe,https://linkedin.com/in/jane/,strong python\n"
+        b"Sam Lee,https://linkedin.com/in/sam,\n"
+        b"Dup Person,https://linkedin.com/in/jane,should be skipped\n"
+    )
+    resp = client.post(
+        f"/jobs/{job_id}/sourced/import-csv", headers=auth_header,
+        files={"file": ("list.csv", csv_bytes, "text/csv")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["added"] == 2 and body["skipped_duplicates"] == 1
+
+    listed = client.get(f"/jobs/{job_id}/sourced", headers=auth_header).json()
+    assert {p["full_name"] for p in listed} == {"Jane Doe", "Sam Lee"}
+
+    # re-importing the same list adds nothing — all three rows are now known
+    again = client.post(
+        f"/jobs/{job_id}/sourced/import-csv", headers=auth_header,
+        files={"file": ("list.csv", csv_bytes, "text/csv")},
+    ).json()
+    assert again["added"] == 0 and again["skipped_duplicates"] == 3
+
+
+def test_personal_outreach_uses_profile(client, auth_header, monkeypatch):
+    """Spec §A2: drafts personalised from JobSpec + what the recruiter pasted."""
+    from app.agents.sourcer import OutreachDraft
+    from app.routers import jobs as jobs_router
+
+    captured: dict = {}
+
+    def fake(*, title, profile_text, spec=None, user_id=None):
+        captured.update(title=title, profile_text=profile_text)
+        return [
+            OutreachDraft(tone="warm", subject="s1", message="m1"),
+            OutreachDraft(tone="direct", subject="s2", message="m2"),
+            OutreachDraft(tone="casual", subject="s3", message="m3"),
+        ]
+
+    monkeypatch.setattr(jobs_router, "generate_personal_outreach", fake)
+    job_id = _seed_job(client)
+
+    resp = client.post(
+        f"/jobs/{job_id}/outreach", headers=auth_header,
+        json={"profile_text": "Led the payments migration at Acme"},
+    )
+    assert resp.status_code == 200
+    assert [d["tone"] for d in resp.json()] == ["warm", "direct", "casual"]
+    assert "payments migration" in captured["profile_text"]  # the profile reached the model
+
+
+def test_personal_outreach_requires_a_profile(client, auth_header):
+    job_id = _seed_job(client)
+    resp = client.post(f"/jobs/{job_id}/outreach", headers=auth_header, json={})
+    assert resp.status_code == 422

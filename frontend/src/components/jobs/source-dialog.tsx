@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Copy, Loader2, Radar, UserPlus } from "lucide-react";
+import { Copy, Loader2, Radar, Upload, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -55,6 +55,71 @@ export function SourceDialog({ jobId, jobTitle }: { jobId: number; jobTitle: str
   const [newName, setNewName] = React.useState("");
   const [newUrl, setNewUrl] = React.useState("");
   const [adding, setAdding] = React.useState(false);
+  const csvRef = React.useRef<HTMLInputElement>(null);
+  const profileFileRef = React.useRef<HTMLInputElement>(null);
+  const [uploadingProfile, setUploadingProfile] = React.useState(false);
+  // Per-candidate outreach (spec §A2: personalised from the pasted profile)
+  const [personal, setPersonal] = React.useState<SourcingKit["outreach"] | null>(null);
+  const [drafting, setDrafting] = React.useState(false);
+
+  async function importCsv(file: File) {
+    const form = new FormData();
+    form.set("file", file);
+    const res = await fetch(`/api/jobs/${jobId}/sourced/import-csv`, {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) {
+      toast.error("CSV import failed");
+      return;
+    }
+    const body = (await res.json()) as { added: number; skipped_duplicates: number };
+    toast.success(`Added ${body.added} · skipped ${body.skipped_duplicates} already sourced`);
+    loadSourced();
+    if (csvRef.current) csvRef.current.value = "";
+  }
+
+  async function uploadProfile(file: File) {
+    setUploadingProfile(true);
+    const form = new FormData();
+    form.set("file", file);
+    if (importName.trim()) form.set("full_name", importName.trim());
+    const res = await fetch(`/api/jobs/${jobId}/import-profile/upload`, {
+      method: "POST",
+      body: form,
+    });
+    setUploadingProfile(false);
+    if (profileFileRef.current) profileFileRef.current.value = "";
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.detail ?? "Could not read that file");
+      return;
+    }
+    const body = await res.json();
+    setImportName("");
+    router.refresh();
+    toast.success(`Imported as application #${body.application_id} — scoring now`);
+  }
+
+  async function draftOutreach() {
+    if (!importText.trim()) {
+      toast.error("Paste the profile first — the drafts are written from it");
+      return;
+    }
+    setDrafting(true);
+    setPersonal(null);
+    const res = await fetch(`/api/jobs/${jobId}/outreach`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile_text: importText }),
+    });
+    setDrafting(false);
+    if (!res.ok) {
+      toast.error("Could not draft outreach");
+      return;
+    }
+    setPersonal((await res.json()) as SourcingKit["outreach"]);
+  }
 
   const loadSourced = React.useCallback(async () => {
     const res = await fetch(`/api/jobs/${jobId}/sourced`, { cache: "no-store" });
@@ -251,6 +316,31 @@ export function SourceDialog({ jobId, jobTitle }: { jobId: number; jobTitle: str
             </Button>
           </div>
 
+          <div className="mb-3">
+            <input
+              ref={csvRef}
+              type="file"
+              accept=".csv"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) importCsv(f);
+              }}
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-8 gap-1.5 text-xs"
+              onClick={() => csvRef.current?.click()}
+            >
+              <Upload className="size-3.5" /> Import CSV list
+            </Button>
+            <span className="text-muted-foreground ml-2 text-[11px]">
+              columns: name, profile_url, notes — duplicates skipped
+            </span>
+          </div>
+
           {sourced.length > 0 && (
             <ul className="space-y-1.5">
               {sourced.map((p) => (
@@ -324,10 +414,70 @@ export function SourceDialog({ jobId, jobTitle }: { jobId: number; jobTitle: str
               onChange={(e) => setImportText(e.target.value)}
               placeholder="Paste the profile summary, experience, skills…"
             />
-            <Button type="button" onClick={importProfile} disabled={importing} className="mt-1">
-              {importing ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
-              {importing ? "Importing…" : "Import & score"}
+            <div className="mt-1 flex flex-wrap gap-2">
+              <Button type="button" onClick={importProfile} disabled={importing} className="flex-1">
+                {importing ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
+                {importing ? "Importing…" : "Import & score"}
+              </Button>
+
+              <input
+                ref={profileFileRef}
+                type="file"
+                accept=".pdf,.docx,.txt,.md"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) uploadProfile(f);
+                }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                disabled={uploadingProfile}
+                onClick={() => profileFileRef.current?.click()}
+                className="gap-1.5"
+              >
+                {uploadingProfile ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Upload className="size-4" />
+                )}
+                Upload PDF export
+              </Button>
+            </div>
+            <p className="text-muted-foreground text-[11px]">
+              Or upload the profile PDF (LinkedIn → More → Save to PDF).
+            </p>
+
+            {/* Per-candidate outreach, written from the pasted profile */}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={draftOutreach}
+              disabled={drafting}
+              className="mt-1 gap-1.5"
+            >
+              {drafting ? <Loader2 className="size-4 animate-spin" /> : <Radar className="size-4" />}
+              {drafting ? "Writing…" : "Draft outreach for this person"}
             </Button>
+
+            {personal && personal.length > 0 && (
+              <div className="grid gap-2">
+                {personal.map((o, i) => (
+                  <div key={i} className="rounded-xl border p-3">
+                    <div className="mb-1 flex items-center justify-between">
+                      <span className="chip bg-muted capitalize">{o.tone}</span>
+                      <CopyButton text={`${o.subject}\n\n${o.message}`} label="Outreach" />
+                    </div>
+                    <p className="text-sm font-medium">{o.subject}</p>
+                    <p className="text-muted-foreground mt-1 text-sm whitespace-pre-wrap">
+                      {o.message}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </section>
       </DialogContent>

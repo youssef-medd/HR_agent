@@ -66,6 +66,61 @@ _SYSTEM_PROMPT = (
 )
 
 
+class OutreachSet(BaseModel):
+    outreach: list[OutreachDraft] = Field(default_factory=list)
+
+
+_PERSONAL_OUTREACH_SYSTEM = (
+    "You are an expert technical sourcer writing a first-touch message to a "
+    "specific candidate a recruiter found. You get the role and the candidate's "
+    "public profile. Write EXACTLY three drafts with distinct tones — 'warm', "
+    "'direct', 'casual'. Rules:\n"
+    "- Reference something REAL and specific from THIS candidate's profile (a "
+    "company, a project, a technology they actually list). That specific line is "
+    "the point of the message.\n"
+    "- Never invent facts, compensation, or guarantees. If the profile is thin, "
+    "stay general rather than inventing.\n"
+    "- Short: under 120 words, non-spammy, no hype. Use [placeholders] only for "
+    "things you genuinely cannot know (e.g. [your name]).\n"
+    "- Say plainly why they are a fit for THIS role.\n"
+    'Respond with a single JSON object {"outreach": [{tone, subject, message}]}. '
+    "Nothing else."
+)
+
+
+def generate_personal_outreach(
+    *,
+    title: str,
+    profile_text: str,
+    spec: dict | None = None,
+    user_id: str | None = None,
+) -> list[OutreachDraft]:
+    """Three outreach drafts personalised to one candidate's actual profile.
+
+    Spec §A2: "outreach drafts personalized from JobSpec + whatever the recruiter
+    pasted". Sending stays manual — this only drafts.
+    """
+    parts = [f"ROLE: {title}"]
+    brief = _spec_brief(spec)
+    if brief:
+        parts.append("ROLE REQUIREMENTS:\n" + brief)
+    parts.append(f"CANDIDATE PUBLIC PROFILE:\n{(profile_text or '').strip()[:6000]}")
+    try:
+        result: OutreachSet = llm_call(
+            profile="chat",
+            messages=[
+                {"role": "system", "content": _PERSONAL_OUTREACH_SYSTEM},
+                {"role": "user", "content": "\n\n".join(parts)},
+            ],
+            schema=OutreachSet,
+            user_id=user_id,
+            metadata={"agent": "A2", "prompt_version": PROMPT_VERSION, "stage": "personal_outreach"},
+        )
+    except ValidationError as exc:
+        raise SourcingError(f"Outreach output did not match schema: {exc}") from exc
+    return result.outreach
+
+
 def _spec_brief(spec: dict | None) -> str:
     """Flatten A1's structured JobSpec into sourcing-relevant lines.
 
