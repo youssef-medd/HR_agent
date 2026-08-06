@@ -193,10 +193,20 @@ class HardFilterCheck(BaseModel):
 
 _HARD_FILTER_SYSTEM = (
     "You are a strict eligibility checker for a job. You receive a candidate's "
-    "identity-masked profile and a list of HARD requirements. Return a single "
-    "JSON object {\"unmet\": [...]} listing ONLY the requirements the profile does "
-    "not clearly satisfy. Include a requirement as unmet only when there is no "
-    "evidence in the profile that it is met. Nothing else."
+    "identity-masked profile and a list of ELIMINATORY CRITERIA. Return a single "
+    'JSON object {"unmet": [...]} listing ONLY the criteria that DISQUALIFY this '
+    "candidate.\n"
+    "Criteria come in two shapes — read each one carefully:\n"
+    "1. A positive requirement (e.g. 'Fluent English', '5+ years experience'): it "
+    "is unmet — and therefore disqualifying — when the profile shows no evidence "
+    "the candidate has it.\n"
+    "2. A disqualifier phrased as a negative (e.g. 'No programming experience', "
+    "'Lack of English proficiency', 'Inability to work in a team'): this describes "
+    "a PROBLEM that rules a candidate out. It is disqualifying ONLY when the "
+    "candidate actually HAS that problem. A candidate who clearly programs does "
+    "NOT match 'No programming experience' — do not list it.\n"
+    "When in doubt, leave the criterion out: only list a criterion you are "
+    "confident disqualifies this candidate. Nothing else."
 )
 
 

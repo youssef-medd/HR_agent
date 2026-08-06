@@ -321,3 +321,28 @@ def test_score_node_routes_to_needs_attention_on_error(db_factory, monkeypatch):
     assert state["stage"] == "NEEDS_ATTENTION"
     with db_factory() as db:
         assert db.get(Application, app_id).state == "NEEDS_ATTENTION"
+
+
+def test_hard_filter_negative_criteria_do_not_disqualify_good_candidate(monkeypatch):
+    """Regression: criteria phrased as disqualifiers ('No programming experience')
+    must not be read as requirements the candidate fails to meet.
+
+    A1 sometimes emits negatively-phrased eliminatory criteria; treating them as
+    positive requirements declined a qualified candidate (score 78 -> decline)."""
+    captured: dict = {}
+
+    def fake(*, profile, messages, schema, **_):
+        captured["system"] = messages[0]["content"]
+        from orchestrator.agents.scorer import HardFilterCheck
+
+        return HardFilterCheck(unmet=[])  # a good candidate disqualifies on nothing
+
+    monkeypatch.setattr(scorer_mod, "llm_call", fake)
+    unmet = scorer_mod.check_hard_filters(
+        {"skills": ["Python", "Docker"], "languages": ["English"], "years_experience": 3},
+        ["No basic programming knowledge or experience", "Lack of basic English proficiency"],
+    )
+    assert unmet == []
+    # the checker must explain both criterion shapes to the model
+    assert "phrased as a negative" in captured["system"]
+    assert "does NOT match" in captured["system"]

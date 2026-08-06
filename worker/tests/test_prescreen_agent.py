@@ -167,3 +167,27 @@ def test_slot_already_covered_detects_and_fails_safe(monkeypatch):
 
     monkeypatch.setattr(prescreen_mod, "llm_call", boom)
     assert slot_already_covered("Notice period?", [{"q": "x", "a": "y"}]).covered is False
+
+
+def test_summary_accepts_recap_as_list():
+    """Regression: the model emits a '5-line recap' as a JSON array. Rejecting it
+    discarded the WHOLE summary — slots and flags included — because the caller
+    falls back to an empty summary on any validation error."""
+    from orchestrator.agents.prescreen import PrescreenSummary
+
+    out = PrescreenSummary.model_validate(
+        {
+            "recap": ["Can start in one month.", "Salary: 2500 TND.", "Willing on-site."],
+            "slots": {"availability": "one month", "salary_expectation": "2500 TND"},
+            "flags": {"great_signals": ["Ready within a month"]},
+        }
+    )
+    assert out.recap.splitlines() == [
+        "Can start in one month.", "Salary: 2500 TND.", "Willing on-site."
+    ]
+    assert out.slots.availability == "one month"
+    assert out.slots.salary_expectation == "2500 TND"
+    assert out.flags.great_signals == ["Ready within a month"]
+
+    # a plain string recap still works
+    assert PrescreenSummary.model_validate({"recap": "one line"}).recap == "one line"

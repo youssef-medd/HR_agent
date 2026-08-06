@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 
 from app.gateway import llm_call
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 PROMPT_VERSION = "prescreen@v2"
 QUESTIONS_PROMPT_VERSION = "prescreen_questions@v2"
@@ -83,6 +83,19 @@ class PrescreenSummary(BaseModel):
     recap: str = Field(default="", description="<= 5 line recap for the recruiter")
     slots: PrescreenSlots = Field(default_factory=PrescreenSlots)
     flags: PrescreenFlags = Field(default_factory=PrescreenFlags)
+
+    @field_validator("recap", mode="before")
+    @classmethod
+    def _join_recap_lines(cls, v: object) -> object:
+        """Accept the recap as a list of lines.
+
+        A "5-line recap" is naturally emitted as a JSON array; rejecting that
+        threw away the whole summary — slots and flags included — because the
+        caller falls back to an empty summary on any validation error.
+        """
+        if isinstance(v, list):
+            return "\n".join(str(line).strip() for line in v if str(line).strip())
+        return v
 
 
 class PrescreenError(RuntimeError):
