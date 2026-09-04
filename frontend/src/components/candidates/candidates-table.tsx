@@ -19,6 +19,7 @@ import {
   Layers,
   UserRound,
 } from "lucide-react";
+import { CandidateSheet } from "@/components/candidates/candidate-sheet";
 import { StateBadge } from "@/components/shell/state-badge";
 import type { ApplicationSummary } from "@/lib/api/client";
 import { type ApplicationState } from "@/lib/mocks/types";
@@ -122,6 +123,9 @@ export function CandidatesTable({ rows }: { rows: ApplicationSummary[] }) {
   const [sortOrder, setSortOrder] = React.useState<SortOrder>("desc");
   const [sortOpen, setSortOpen] = React.useState(false);
   const [exportOpen, setExportOpen] = React.useState(false);
+  // The row opens a detail sheet; the summary is enough to render its header
+  // while the full application view loads.
+  const [detail, setDetail] = React.useState<ApplicationSummary | null>(null);
 
   const widths: Record<string, number> = {
     check: 44,
@@ -150,7 +154,7 @@ export function CandidatesTable({ rows }: { rows: ApplicationSummary[] }) {
         case "name":
           return (r.full_name || r.candidate_ref).toLowerCase();
         case "job":
-          return r.job_id;
+          return (r.job_title ?? `Job #${r.job_id}`).toLowerCase();
         case "score":
           return r.score ?? -1;
         case "state":
@@ -198,7 +202,7 @@ export function CandidatesTable({ rows }: { rows: ApplicationSummary[] }) {
   function exportCSV() {
     const headers = ["Id", "Name", "Reference", "Job", "Score", "Recommendation", "Stage", "Applied"];
     const lines = sorted.map((r) =>
-      [r.id, r.full_name ?? "", r.candidate_ref, r.job_id, r.score ?? "", r.recommendation ?? "", r.state, r.created_at.slice(0, 10)]
+      [r.id, r.full_name ?? "", r.candidate_ref, r.job_title ?? `Job #${r.job_id}`, r.score ?? "", r.recommendation ?? "", r.state, r.created_at.slice(0, 10)]
         .map((c) => `"${String(c).replaceAll('"', '""')}"`)
         .join(","),
     );
@@ -340,13 +344,24 @@ export function CandidatesTable({ rows }: { rows: ApplicationSummary[] }) {
                 {pageRows.map((r) => (
                   <motion.div key={r.id} variants={animate ? rowVariants : undefined}>
                     <div
-                      className={`flex border-b py-3 transition-colors duration-150 last:border-b-0 ${
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Open ${r.full_name || r.candidate_ref}`}
+                      onClick={() => setDetail(r)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setDetail(r);
+                        }
+                      }}
+                      className={`flex cursor-pointer border-b py-3 transition-colors duration-150 last:border-b-0 ${
                         selected.has(r.id) ? "bg-accent/70" : "hover:bg-accent/40"
                       }`}
                     >
                       <div
                         className="flex shrink-0 items-center justify-center"
                         style={{ width: widths.check }}
+                        onClick={(e) => e.stopPropagation()}
                       >
                         <input
                           type="checkbox"
@@ -370,8 +385,11 @@ export function CandidatesTable({ rows }: { rows: ApplicationSummary[] }) {
                       <div
                         className="flex shrink-0 items-center px-3 text-sm"
                         style={{ width: widths.job }}
+                        title={r.job_title ?? undefined}
                       >
-                        Job #{r.job_id}
+                        <span className="truncate">
+                          {r.job_title ?? `Job #${r.job_id}`}
+                        </span>
                       </div>
                       <div
                         className="flex shrink-0 items-center overflow-hidden px-3"
@@ -426,6 +444,8 @@ export function CandidatesTable({ rows }: { rows: ApplicationSummary[] }) {
           </span>
         )}
       </div>
+
+      <CandidateSheet row={detail} onOpenChange={(open) => !open && setDetail(null)} />
     </div>
   );
 }

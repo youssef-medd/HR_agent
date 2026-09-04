@@ -11,6 +11,19 @@ export const dynamic = "force-dynamic";
 
 function contextText(ctx: Record<string, unknown>): string {
   if (typeof ctx?.error === "string") return ctx.error;
+
+  // The interview-invite gate carries the evidence the decision rests on —
+  // read it out rather than dumping the raw JSON at the recruiter.
+  if (ctx?.score !== undefined || ctx?.prescreen_summary) {
+    const parts: string[] = [];
+    if (ctx.score !== undefined && ctx.score !== null) parts.push(`Score ${ctx.score}/100`);
+    if (typeof ctx.recommendation === "string") parts.push(ctx.recommendation);
+    if (typeof ctx.prescreen_summary === "string" && ctx.prescreen_summary.trim()) {
+      parts.push(ctx.prescreen_summary.trim());
+    }
+    if (parts.length) return parts.join(" · ");
+  }
+
   const keys = Object.keys(ctx ?? {});
   return keys.length ? JSON.stringify(ctx) : "Awaiting a recruiter decision.";
 }

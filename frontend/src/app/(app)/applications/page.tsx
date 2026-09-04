@@ -1,3 +1,4 @@
+import { InterviewDialog } from "@/components/applications/interview-dialog";
 import { OnboardDialog } from "@/components/applications/onboard-dialog";
 import { PrescreenDialog } from "@/components/applications/prescreen-dialog";
 import { ScoreCardDialog } from "@/components/applications/score-card-dialog";
@@ -34,6 +35,12 @@ const ONBOARD_STATES: ReadonlySet<string> = new Set([
   "OFFER",
   "HIRED",
   "ONBOARDING",
+]);
+
+// A6 controls: an interview exists to inspect, replan, or record an outcome for.
+const INTERVIEW_STATES: ReadonlySet<string> = new Set([
+  "INTERVIEW_SCHEDULED",
+  "INTERVIEWED",
 ]);
 
 // States at or past pre-screening — a prescreen block exists to show.
@@ -90,7 +97,7 @@ export default async function ApplicationsPage() {
                           {app.full_name || app.candidate_ref}
                         </p>
                         <p className="text-muted-foreground mb-2 text-xs">
-                          Job #{app.job_id}
+                          {app.job_title ?? `Job #${app.job_id}`}
                         </p>
                         <p className="text-muted-foreground text-[10px]">
                           #{app.id} · {app.created_at.slice(0, 10)}
@@ -103,6 +110,12 @@ export default async function ApplicationsPage() {
                         )}
                         {PRESCREEN_STATES.has(state) && (
                           <PrescreenDialog
+                            appId={app.id}
+                            name={app.full_name || app.candidate_ref}
+                          />
+                        )}
+                        {INTERVIEW_STATES.has(state) && (
+                          <InterviewDialog
                             appId={app.id}
                             name={app.full_name || app.candidate_ref}
                           />

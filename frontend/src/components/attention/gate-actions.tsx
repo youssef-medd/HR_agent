@@ -7,6 +7,25 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 
+/** What the approve button does, per gate. Anything unlisted is a plain resolve. */
+const APPROVE_LABEL: Record<string, string> = {
+  offer: "Approve offer",
+  rejection: "Approve rejection",
+  interview_invite: "Invite to interview",
+};
+
+function APPROVED_TOAST(gate: string | null, candidate: string): string {
+  if (gate === "interview_invite") return `${candidate} invited — they can now pick a time`;
+  if (gate === "offer") return `Offer approved for ${candidate}`;
+  if (gate === "rejection") return `Rejection approved for ${candidate}`;
+  return `Resolved for ${candidate}`;
+}
+
+function DECLINED_TOAST(gate: string | null, candidate: string): string {
+  if (gate === "interview_invite") return `${candidate} not invited — no slots were sent`;
+  return `${candidate} kept — ${gate ?? "item"} not approved`;
+}
+
 /** Approve / keep buttons for an open human gate. Posts the decision and refreshes. */
 export function GateActions({
   itemId,
@@ -38,15 +57,13 @@ export function GateActions({
     }
 
     toast.success(
-      decision === "approve"
-        ? `${gate === "offer" ? "Offer" : "Rejection"} approved for ${candidate}`
-        : `${candidate} kept — ${gate ?? "item"} not approved`,
+      decision === "approve" ? APPROVED_TOAST(gate, candidate) : DECLINED_TOAST(gate, candidate),
     );
     router.refresh();
   }
 
-  const approveLabel =
-    gate === "offer" ? "Approve offer" : gate === "rejection" ? "Approve rejection" : "Resolve";
+  const approveLabel = APPROVE_LABEL[gate ?? ""] ?? "Resolve";
+  const rejectLabel = gate === "interview_invite" ? "Not this time" : "Keep candidate";
 
   return (
     <div className="flex gap-2">
@@ -57,7 +74,7 @@ export function GateActions({
         onClick={() => decide("reject")}
       >
         {pending === "reject" && <Loader2 className="size-3.5 animate-spin" />}
-        Keep candidate
+        {rejectLabel}
       </Button>
       <Button size="sm" disabled={pending !== null} onClick={() => decide("approve")}>
         {pending === "approve" && <Loader2 className="size-3.5 animate-spin" />}

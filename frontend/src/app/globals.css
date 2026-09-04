@@ -95,29 +95,39 @@
   --sidebar-ring: var(--welyne-orange);
 }
 
+/*
+ * Dark surface system, matched to welyne.com.
+ *
+ * Taken from the live site's stylesheet so the console reads as the same
+ * product: --color-bg #0b0a0a, --color-bg2 #161311, --color-bg3 #1c1815,
+ * --color-text #ece5db, --color-orange #ff6b00. The greys are warm (a red
+ * bias), not the blue-grey this previously used — that warmth is what makes
+ * the brand orange sit naturally on them.
+ */
 .dark {
-  --background: #0d0e10;
-  --foreground: #ecedee;
-  --card: #17181b;
-  --card-foreground: #ecedee;
-  --popover: #1c1d21;
-  --popover-foreground: #ecedee;
+  --welyne-muted: #8c837a; /* from the site's muted ink */
+  --background: #0b0a0a;
+  --foreground: #ece5db;
+  --card: #161311;
+  --card-foreground: #ece5db;
+  --popover: #1c1815;
+  --popover-foreground: #ece5db;
   --primary: var(--welyne-orange);
   --primary-foreground: #ffffff;
-  --secondary: #212226;
-  --secondary-foreground: #ecedee;
-  --muted: #212226;
-  --muted-foreground: #9a9fa8;
-  --accent: #232428;
-  --accent-foreground: #ecedee;
+  --secondary: #1c1815;
+  --secondary-foreground: #ece5db;
+  --muted: #1c1815;
+  --muted-foreground: #8c837a;
+  --accent: #272119;
+  --accent-foreground: #ece5db;
   --destructive: #f2555a;
-  --border: rgba(255, 255, 255, 0.09);
-  --input: rgba(255, 255, 255, 0.12);
-  --sidebar: #17181b;
-  --sidebar-foreground: #ecedee;
-  --sidebar-accent: #232428;
-  --sidebar-accent-foreground: #ecedee;
-  --sidebar-border: rgba(255, 255, 255, 0.09);
+  --border: rgba(236, 229, 219, 0.1);
+  --input: rgba(236, 229, 219, 0.14);
+  --sidebar: #161311;
+  --sidebar-foreground: #ece5db;
+  --sidebar-accent: #272119;
+  --sidebar-accent-foreground: #ece5db;
+  --sidebar-border: rgba(236, 229, 219, 0.1);
 }
 
 @layer base {
@@ -182,26 +192,249 @@
     @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium;
   }
 
-  /* Cinematic ambient glow — one soft radial spotlight, breathing slowly */
-  .ambient-glow {
-    will-change: transform, opacity;
-    animation: ambient-breathe 12s ease-in-out infinite alternate;
+  /* Console backdrop glows. Defined in CSS rather than passed from JS so the
+     server renders the right colour — `next-themes` only resolves client-side,
+     and a JS-driven ground flashes the wrong theme on first paint.
+     The dark values are welyne.com's own hero gradient. */
+  .console-glow-a {
+    background: radial-gradient(
+      60% 50% at 85% 8%,
+      rgba(255, 107, 0, 0.16),
+      transparent 60%
+    );
   }
-  .dark .ambient-glow {
-    opacity: 0.35;
+  .dark .console-glow-a {
+    background: radial-gradient(
+      60% 50% at 85% 8%,
+      rgba(255, 107, 0, 0.2),
+      transparent 60%
+    );
   }
-  @keyframes ambient-breathe {
-    0% {
-      transform: scale(1);
-      opacity: 0.85;
-    }
-    100% {
-      transform: scale(1.08);
-      opacity: 1;
-    }
+  .console-glow-b {
+    background: radial-gradient(
+      50% 40% at 10% 95%,
+      rgba(255, 107, 0, 0.08),
+      transparent 60%
+    );
+  }
+  .dark .console-glow-b {
+    background: radial-gradient(
+      50% 40% at 10% 95%,
+      rgba(255, 107, 0, 0.1),
+      transparent 60%
+    );
+  }
+
+  /* Engineering grid. The console shows an audited state machine, so the ground
+     reads as drafting paper rather than decoration: a fine 72px rule, faded out
+     toward the edges so it never competes with a card. */
+  .console-grid {
+    background-image:
+      linear-gradient(to right, currentColor 1px, transparent 1px),
+      linear-gradient(to bottom, currentColor 1px, transparent 1px);
+    background-size: 72px 72px;
+    color: rgba(17, 15, 14, 0.05);
+    -webkit-mask-image: radial-gradient(75% 60% at 50% 32%, #000 25%, transparent 100%);
+    mask-image: radial-gradient(75% 60% at 50% 32%, #000 25%, transparent 100%);
+  }
+  .dark .console-grid {
+    color: rgba(255, 255, 255, 0.045);
+  }
+
+  /* Film grain, rendered once by the browser from an SVG filter — no canvas, no
+     animation frame. `overlay` keeps it from flattening the glows underneath. */
+  .console-grain {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    opacity: 0.16;
+    mix-blend-mode: overlay;
+  }
+  .dark .console-grain {
+    opacity: 0.28;
+  }
+
+  /* Vignette: pulls the eye to the content column and stops the wide desktop
+     ground from reading as an empty slab. */
+  .console-vignette {
+    background: radial-gradient(
+      120% 90% at 50% 0%,
+      transparent 45%,
+      rgba(9, 8, 8, 0.06) 100%
+    );
+  }
+  .dark .console-vignette {
+    background: radial-gradient(
+      120% 90% at 50% 0%,
+      transparent 40%,
+      rgba(0, 0, 0, 0.55) 100%
+    );
+  }
+
+  /* A single hairline under the top nav, brightest where the glow lands. */
+  .console-horizon {
+    background: linear-gradient(
+      to right,
+      transparent,
+      rgba(255, 107, 0, 0.25) 45%,
+      rgba(255, 107, 0, 0.08) 70%,
+      transparent
+    );
+  }
+
+  /* ----------------------------------------------------------------------
+   * Neo-brutalist surfaces (recruiter console).
+   *
+   * Added ALONGSIDE `.surface` rather than replacing it: `.surface` is shared
+   * by all seven console pages, so redefining it would restyle the whole
+   * console at once. Converting a page means swapping the class; converting
+   * everything later means redefining `.surface` in terms of these.
+   *
+   * Geometry over colour — 3px border, hard offset shadow, no blur — driven by
+   * Welyne orange rather than the reference's multi-hue palette.
+   * -------------------------------------------------------------------- */
+  .brutal {
+    @apply bg-card rounded-xl border-[3px] border-black;
+    box-shadow: 6px 6px 0 0 rgba(0, 0, 0, 1);
+  }
+  .dark .brutal {
+    /* `bg-card` (#161311), not zinc — zinc is a cool grey and fights the warm
+       welyne.com palette. Ink is the site's warm off-white. */
+    @apply bg-card border-[#ece5db];
+    box-shadow: 6px 6px 0 0 #ece5db;
+  }
+
+  /* Orange fill, same geometry — for the one tile that must pull the eye. */
+  .brutal-accent {
+    @apply rounded-xl border-[3px] border-black text-white;
+    background: linear-gradient(150deg, #ff8a33 0%, #ff6b00 55%, #f05e00 100%);
+    box-shadow: 6px 6px 0 0 rgba(0, 0, 0, 1);
+  }
+  .dark .brutal-accent {
+    @apply border-[#ece5db];
+    box-shadow: 6px 6px 0 0 #ece5db;
+  }
+
+  /* Card title: heavy, shouty, with the reference's underline rule. */
+  .brutal-head {
+    @apply border-b-[3px] border-black pb-2 font-black tracking-tighter uppercase;
+    font-family: var(--font-heading);
+  }
+  .dark .brutal-head {
+    @apply border-[#ece5db];
+  }
+
+  /* Tabular mono for figures — what makes a stat read as instrumentation. */
+  .brutal-num {
+    font-family: var(--font-jetbrains), ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    @apply font-bold tracking-tighter;
+  }
+
+  /* Dot-matrix texture. Pair with a `relative` parent + `absolute inset-0`. */
+  .brutal-dots {
+    background-image: radial-gradient(#000 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+  .dark .brutal-dots {
+    background-image: radial-gradient(#ece5db 1px, transparent 1px);
+  }
+
+  /* Hover lift toward the shadow. Motion-sensitive users keep the static card. */
+  .brutal-lift {
+    transition:
+      transform 150ms ease,
+      box-shadow 150ms ease;
+  }
+  .brutal-lift:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: 9px 9px 0 0 rgba(0, 0, 0, 1);
+  }
+  .dark .brutal-lift:hover {
+    box-shadow: 9px 9px 0 0 #ece5db;
   }
   @media (prefers-reduced-motion: reduce) {
-    .ambient-glow {
+    .brutal-lift,
+    .brutal-lift:hover {
+      transform: none;
+      transition: none;
+    }
+  }
+
+  /* --- Candidate pre-screening chat -------------------------------------- */
+
+  /* A message settles into place instead of snapping in. */
+  .msg-in {
+    animation: msg-in 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes msg-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.985);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  /* The assistant is composing: three dots, staggered. */
+  .typing-dot {
+    animation: typing 1.25s ease-in-out infinite;
+  }
+  .typing-dot:nth-child(2) {
+    animation-delay: 0.16s;
+  }
+  .typing-dot:nth-child(3) {
+    animation-delay: 0.32s;
+  }
+  @keyframes typing {
+    0%,
+    70%,
+    100% {
+      opacity: 0.25;
+      transform: translateY(0);
+    }
+    35% {
+      opacity: 1;
+      transform: translateY(-2.5px);
+    }
+  }
+
+  /* Slow breathing halo behind the assistant mark — signals a live agent. */
+  .agent-pulse {
+    animation: agent-pulse 3.2s ease-in-out infinite;
+  }
+  @keyframes agent-pulse {
+    0%,
+    100% {
+      opacity: 0.35;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.7;
+      transform: scale(1.12);
+    }
+  }
+
+  /* Thin, self-effacing scrollbar for the transcript. */
+  .chat-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+  }
+  .chat-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+  .chat-scroll::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.14);
+    border-radius: 999px;
+  }
+  .chat-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .msg-in,
+    .typing-dot,
+    .agent-pulse {
       animation: none;
     }
   }

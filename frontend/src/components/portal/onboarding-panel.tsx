@@ -3,8 +3,10 @@
 import * as React from "react";
 import { CheckCircle2, FileUp, Loader2 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import type { OnboardingView } from "@/lib/api/client";
+
+// Images allowed: a phone photo of an ID or a RIB is the normal case.
+const DOC_ACCEPT = ".pdf,.docx,.txt,.md,.png,.jpg,.jpeg,.webp";
 
 export function OnboardingPanel({ email, appId }: { email: string; appId: number }) {
   const [view, setView] = React.useState<OnboardingView | null>(null);
@@ -44,10 +46,12 @@ export function OnboardingPanel({ email, appId }: { email: string; appId: number
       : 0;
 
   return (
-    <div className="surface p-6">
+    <div className="rounded-3xl border border-white/[0.08] bg-black/55 p-6 shadow-[0_8px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl">
       <div className="mb-4">
-        <p className="font-heading text-sm font-semibold">Welcome — let&apos;s get you set up</p>
-        <p className="text-muted-foreground text-sm">
+        <p className="font-heading text-sm font-semibold text-white">
+          Welcome — let&apos;s get you set up
+        </p>
+        <p className="text-sm text-white/45">
           Upload the documents below. Your recruiter is notified as you go.
         </p>
       </div>
@@ -56,12 +60,12 @@ export function OnboardingPanel({ email, appId }: { email: string; appId: number
         <>
           <div className="mb-4">
             <div className="mb-1 flex justify-between text-xs">
-              <span className="text-muted-foreground">Documents collected</span>
-              <span className="tabular-nums">
+              <span className="text-white/45">Documents collected</span>
+              <span className="tabular-nums text-white/70">
                 {view.documents_received}/{view.documents_total}
               </span>
             </div>
-            <div className="bg-muted h-2 overflow-hidden rounded-full">
+            <div className="h-2 overflow-hidden rounded-full bg-white/10">
               <div className="bg-primary h-full rounded-full" style={{ width: `${pct}%` }} />
             </div>
           </div>
@@ -70,33 +74,31 @@ export function OnboardingPanel({ email, appId }: { email: string; appId: number
             {documents.map((t) => (
               <li
                 key={t.id}
-                className="bg-muted/50 flex items-center justify-between gap-3 rounded-lg p-3"
+                className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-white/[0.03] p-3"
               >
-                <span className="flex items-center gap-2 text-sm">
+                <span className="flex items-center gap-2 text-sm text-white/85">
                   {t.uploaded ? (
-                    <CheckCircle2 className="size-4 text-emerald-500" />
+                    <CheckCircle2 className="size-4 text-emerald-400" />
                   ) : (
-                    <FileUp className="text-muted-foreground size-4" />
+                    <FileUp className="size-4 text-white/30" />
                   )}
                   {t.label}
                 </span>
                 {t.uploaded ? (
-                  <span className="text-xs text-emerald-600 dark:text-emerald-400">Received</span>
+                  <span className="text-xs text-emerald-400">Received</span>
                 ) : (
                   <label className="cursor-pointer">
-                    <Button asChild size="sm" variant="outline" disabled={busy === t.id}>
-                      <span>
-                        {busy === t.id ? (
-                          <Loader2 className="size-3.5 animate-spin" />
-                        ) : (
-                          <FileUp className="size-3.5" />
-                        )}
-                        Upload
-                      </span>
-                    </Button>
+                    <span className="hover:border-primary/50 inline-flex items-center gap-1.5 rounded-lg border border-white/12 bg-white/[0.04] px-3 py-1.5 text-xs text-white transition-colors">
+                      {busy === t.id ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <FileUp className="size-3.5" />
+                      )}
+                      Upload
+                    </span>
                     <input
                       type="file"
-                      accept=".pdf,.docx,.txt,.md"
+                      accept={DOC_ACCEPT}
                       className="hidden"
                       onChange={(e) => {
                         const f = e.target.files?.[0];
@@ -112,15 +114,15 @@ export function OnboardingPanel({ email, appId }: { email: string; appId: number
       )}
 
       {view.complete && (
-        <p className="mb-4 rounded-lg bg-emerald-500/10 p-3 text-sm text-emerald-600 dark:text-emerald-400">
+        <p className="mb-4 rounded-xl border border-emerald-400/25 bg-emerald-500/10 p-3 text-sm text-emerald-400">
           All documents received — you&apos;re all set. Welcome aboard!
         </p>
       )}
 
       {other.length > 0 && (
         <div>
-          <p className="eyebrow mb-2">Your first week</p>
-          <ul className="text-muted-foreground space-y-1 text-sm">
+          <p className="mb-2 text-xs tracking-wide text-white/40 uppercase">Your first week</p>
+          <ul className="space-y-1 text-sm text-white/55">
             {other.map((t) => (
               <li key={t.id}>• {t.label}</li>
             ))}

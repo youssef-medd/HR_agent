@@ -21,6 +21,9 @@ import { CanvasRevealEffect } from "@/components/ui/canvas-reveal";
 
 type Step = "role" | "signin" | "candidate" | "success";
 
+/** Local-dev convenience: the Recruiter card signs in without a password. */
+const DEV_AUTOLOGIN = process.env.NEXT_PUBLIC_DEV_AUTOLOGIN === "1";
+
 function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = React.useState(false);
   React.useEffect(() => {
@@ -45,9 +48,61 @@ export function CinematicLogin() {
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
+  // Shown on the role chooser itself, so a failed dev sign-in never forces the
+  // credential form into view.
+  const [roleError, setRoleError] = React.useState<string | null>(null);
   const [pending, setPending] = React.useState(false);
   const [initialCanvasVisible, setInitialCanvasVisible] = React.useState(true);
   const [reverseCanvasVisible, setReverseCanvasVisible] = React.useState(false);
+
+  /** Cinematic outro: collapse the dots, then enter the console. */
+  const enterConsole = React.useCallback(() => {
+    setReverseCanvasVisible(true);
+    setTimeout(() => setInitialCanvasVisible(false), 50);
+    setStep("success");
+
+    const next = searchParams.get("next");
+    const target = next && next.startsWith("/") ? next : "/";
+    setTimeout(
+      () => {
+        router.replace(target);
+        router.refresh();
+      },
+      reducedMotion ? 200 : 1600,
+    );
+  }, [reducedMotion, router, searchParams]);
+
+  /** Local dev: the recruiter card signs in directly, no credentials typed. */
+  async function onRecruiter() {
+    if (!DEV_AUTOLOGIN) {
+      setStep("signin");
+      return;
+    }
+    if (pending) return;
+    setError(null);
+    setPending(true);
+    // One retry: the api container is often still booting right after
+    // `docker compose up`, and a single 502 should not cost a click.
+    let ok = false;
+    for (let attempt = 0; attempt < 2 && !ok; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 1200));
+      try {
+        ok = (await fetch("/api/auth/dev")).ok;
+      } catch {
+        ok = false;
+      }
+    }
+    setPending(false);
+    if (!ok) {
+      // Stay on the role chooser rather than dropping to the credential form —
+      // dev auto-login exists precisely so nobody types a password here.
+      setRoleError(
+        "Can't reach the API. Start Docker Desktop, then `docker compose up -d` and try again."
+      );
+      return;
+    }
+    enterConsole();
+  }
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -68,20 +123,7 @@ export function CinematicLogin() {
       return;
     }
 
-    // Cinematic outro: collapse the dots, then enter the console.
-    setReverseCanvasVisible(true);
-    setTimeout(() => setInitialCanvasVisible(false), 50);
-    setStep("success");
-
-    const next = searchParams.get("next");
-    const target = next && next.startsWith("/") ? next : "/";
-    setTimeout(
-      () => {
-        router.replace(target);
-        router.refresh();
-      },
-      reducedMotion ? 200 : 1600,
-    );
+    enterConsole();
   }
 
   return (
@@ -176,11 +218,16 @@ export function CinematicLogin() {
                   </p>
                 </div>
 
+                {roleError && (
+                  <p className="mb-4 text-center text-sm text-red-400">{roleError}</p>
+                )}
+
                 <div className="grid gap-4 sm:grid-cols-2">
                   {/* Recruiter — the primary path */}
                   <button
-                    onClick={() => setStep("signin")}
-                    className="group relative flex flex-col items-center gap-4 overflow-hidden rounded-3xl p-[1px] text-center transition-transform duration-200 hover:-translate-y-1"
+                    onClick={onRecruiter}
+                    disabled={pending}
+                    className="group relative flex flex-col items-center gap-4 overflow-hidden rounded-3xl p-[1px] text-center transition-transform duration-200 hover:-translate-y-1 disabled:opacity-70"
                   >
                     {/* gradient ring */}
                     <span
@@ -205,11 +252,15 @@ export function CinematicLogin() {
                         </span>
                       </span>
                       <span className="text-primary relative inline-flex items-center gap-1.5 text-sm font-medium">
-                        Sign in
-                        <ArrowRight
-                          className="size-3.5 transition-transform duration-200 group-hover:translate-x-1"
-                          aria-hidden
-                        />
+                        {pending ? "Signing in…" : "Sign in"}
+                        {pending ? (
+                          <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                        ) : (
+                          <ArrowRight
+                            className="size-3.5 transition-transform duration-200 group-hover:translate-x-1"
+                            aria-hidden
+                          />
+                        )}
                       </span>
                     </span>
                   </button>

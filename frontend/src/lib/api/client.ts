@@ -120,6 +120,7 @@ export interface ApplicationView {
 export interface ApplicationSummary {
   id: number;
   job_id: number;
+  job_title: string | null;
   candidate_ref: string;
   state: string;
   full_name: string | null;
@@ -231,12 +232,51 @@ export interface PrescreenView {
   done: boolean;
 }
 
+export interface BookingSlot {
+  /** ISO-8601 UTC start time. */
+  at: string;
+  /** Rendered in the candidate's timezone. */
+  label: string;
+}
+
 export interface BookingView {
   state: string;
   link: string;
   awaiting: boolean;
   booked: boolean;
   when: string | null;
+  scheduled_at: string | null;
+  timezone: string;
+  slots: BookingSlot[];
+  can_reschedule: boolean;
+  no_show: boolean;
+  reschedule_count: number;
+}
+
+export interface InterviewHistoryEntry {
+  kind: string;
+  at: string;
+  slot?: string | null;
+  from?: string | null;
+  source?: string | null;
+  actor?: string | null;
+  reason?: string | null;
+}
+
+export interface InterviewView {
+  application_id: number;
+  state: string;
+  booked: boolean;
+  scheduled_at: string | null;
+  when: string | null;
+  timezone: string;
+  link: string;
+  no_show: boolean;
+  outcome: string | null;
+  reminder_sent: boolean;
+  reschedule_count: number;
+  proposed_slots: string[];
+  history: InterviewHistoryEntry[];
 }
 
 export interface TrackedApplication {
@@ -245,6 +285,8 @@ export interface TrackedApplication {
   job_title: string | null;
   created_at: string;
   timeline: TimelineEntry[];
+  /** The verified candidate address, echoed back for token-link arrivals. */
+  email?: string;
 }
 
 export interface OnboardingTask {
