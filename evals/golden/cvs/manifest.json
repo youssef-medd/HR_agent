@@ -1,0 +1,333 @@
+{
+  "name": "CV parser test set",
+  "version": "1.0",
+  "note": "All people, companies and contact details are fictional. Use as ground truth for regression tests.",
+  "duplicate_groups": {
+    "omar_ben_salah": ["01_en_normal.pdf", "11_duplicate_exact.pdf", "12_duplicate_near_docx.docx"]
+  },
+  "files": [
+    {
+      "file": "01_en_normal.pdf",
+      "category": "normal PDF, English",
+      "format": "pdf",
+      "pages": 1,
+      "language": ["en"],
+      "needs_ocr": false,
+      "person_id": "omar_ben_salah",
+      "expected": {
+        "full_name": "Omar Ben Salah",
+        "title": "Senior Backend Engineer",
+        "email": "omar.bensalah@gmail.com",
+        "phone": "+216 24 118 903",
+        "location": "Tunis, Tunisia",
+        "linkedin": "linkedin.com/in/omarbensalah",
+        "github": "github.com/obensalah",
+        "years_experience": 8,
+        "employers": ["Paymee", "Instadeep", "Vermeg"],
+        "current_employer": "Paymee",
+        "education": ["ENSI Manouba", "IPEIT Tunis"],
+        "skills": ["Python", "Go", "Java", "SQL", "FastAPI", "Django", "Spring Boot", "gRPC", "AWS", "Docker", "Kubernetes", "Terraform", "PostgreSQL", "MongoDB", "Redis", "Kafka", "Elasticsearch"],
+        "certifications": ["AWS Certified Solutions Architect - Associate", "CKAD"],
+        "languages": ["Arabic", "French", "English", "German"]
+      },
+      "tests": ["baseline happy path", "section detection", "date range parsing"]
+    },
+    {
+      "file": "02_fr_normal.docx",
+      "category": "DOCX, French",
+      "format": "docx",
+      "pages": 1,
+      "language": ["fr"],
+      "needs_ocr": false,
+      "person_id": "amina_cherif",
+      "expected": {
+        "full_name": "Amina Cherif",
+        "title": "Ingénieure Data",
+        "email": "amina.cherif@gmail.com",
+        "phone": "+216 27 884 512",
+        "location": "Ariana, Tunisie",
+        "linkedin": "linkedin.com/in/aminacherif",
+        "date_of_birth": "1993-09-22",
+        "years_experience": 7,
+        "employers": ["Talan Tunisie", "Sofrecom Tunisie", "Discovery Informatique"],
+        "current_employer": "Talan Tunisie",
+        "education": ["ENIT", "IPEIN Nabeul"],
+        "skills": ["Python", "SQL", "Scala", "Spark", "Databricks", "Kafka", "Airflow", "dbt", "Azure", "Power BI", "Tableau"],
+        "certifications": ["Microsoft Certified: Azure Data Engineer Associate (DP-203)", "Databricks Certified Data Engineer Professional"],
+        "languages": ["Arabe", "Français", "Anglais"]
+      },
+      "tests": ["docx extraction", "accented characters", "French month names", "numbered/bulleted lists"]
+    },
+    {
+      "file": "03_scanned_ocr_needed.pdf",
+      "category": "scanned PDF, image-only, no text layer",
+      "format": "pdf",
+      "pages": 1,
+      "language": ["en"],
+      "needs_ocr": true,
+      "person_id": "rania_ayari",
+      "expected": {
+        "full_name": "Rania Ayari",
+        "title": "Registered Nurse — Intensive Care",
+        "email": "rania.ayari@yahoo.com",
+        "phone": "+216 26 331 470",
+        "location": "Sousse, Tunisia",
+        "years_experience": 9,
+        "employers": ["Sahloul University Hospital", "Farhat Hached Hospital", "Clinique Les Oliviers"],
+        "current_employer": "Sahloul University Hospital",
+        "education": ["Higher School of Health Sciences, Sousse"],
+        "skills": ["mechanical ventilation", "haemodynamic monitoring", "triage", "ACLS"],
+        "languages": ["Arabic", "French", "English"]
+      },
+      "tests": [
+        "detect that pdftotext returns nothing and fall back to OCR",
+        "tolerate skew (~0.8deg), noise, JPEG artefacts and a scanner streak",
+        "phone digits may be merged by OCR (331470) - normalisation needed"
+      ]
+    },
+    {
+      "file": "04_image_cv_photo.jpg",
+      "category": "image CV (phone photo), French",
+      "format": "jpg",
+      "pages": 1,
+      "language": ["fr"],
+      "needs_ocr": true,
+      "person_id": "hatem_jelassi",
+      "expected": {
+        "full_name": "Hatem Jelassi",
+        "title": "Technicien de maintenance industrielle",
+        "email": "hatem.jelassi88@gmail.com",
+        "phone": "55 214 803",
+        "location": "Sfax",
+        "years_experience": 12,
+        "employers": ["Poulina Group", "SIAME", "Sté Tunisienne des Industries"],
+        "current_employer": "Poulina Group",
+        "education": ["ISET Sfax", "Lycée Thyna"],
+        "skills": ["Siemens S7", "TIA Portal", "hydraulique", "pneumatique", "soudure", "GMAO"],
+        "languages": ["Arabe", "Français", "Anglais"]
+      },
+      "tests": [
+        "accept a non-PDF image input",
+        "crop the page from the desk background before OCR",
+        "handle perspective, rotation, uneven lighting and a warm colour cast",
+        "local phone number with no country code"
+      ]
+    },
+    {
+      "file": "05_ar_arabic.pdf",
+      "category": "Arabic CV, right-to-left",
+      "format": "pdf",
+      "pages": 1,
+      "language": ["ar", "en"],
+      "needs_ocr": false,
+      "person_id": "yassine_trabelsi",
+      "expected": {
+        "full_name": "ياسين الطرابلسي",
+        "full_name_latin": "Yassine Trabelsi",
+        "title": "محلل بيانات أول",
+        "email": "yassine.trabelsi@outlook.com",
+        "phone": "+216 98 447 210",
+        "location": "Sfax, Tunisie",
+        "years_experience": 6,
+        "employers": ["شركة أوريدو تونس", "شركة الأمان للتأمين"],
+        "education": ["جامعة صفاقس"],
+        "languages": ["العربية", "الفرنسية", "الإنجليزية"]
+      },
+      "tests": [
+        "RTL text order after extraction (characters are stored in visual order)",
+        "Arabic section headers must map to the same schema as EN/FR",
+        "Latin contact details embedded in an RTL document",
+        "language detection should return Arabic, not French/English"
+      ]
+    },
+    {
+      "file": "06_mixed_fr_en.pdf",
+      "category": "mixed French/English",
+      "format": "pdf",
+      "pages": 1,
+      "language": ["fr", "en"],
+      "needs_ocr": false,
+      "person_id": "nadia_ferjani",
+      "expected": {
+        "full_name": "Nadia Ferjani",
+        "title": "Product Designer",
+        "email": "nadia.ferjani@proton.me",
+        "phone": "+216 22 507 431",
+        "location": "Tunis",
+        "portfolio": "nadiaferjani.design",
+        "date_of_birth": "1990-03-14",
+        "years_experience": 9,
+        "employers": ["Expensya", "Wevioo", "Freelance"],
+        "current_employer": "Expensya",
+        "education": ["ESSTED Tunis", "Université de Tunis"],
+        "skills": ["Figma", "Sketch", "Adobe XD", "Principle", "Maze", "design system", "user research", "A/B testing", "WCAG 2.1"],
+        "languages": ["Arabe", "Français", "Anglais", "Italien"]
+      },
+      "tests": [
+        "bilingual section headers ('EXPÉRIENCE PROFESSIONNELLE / WORK EXPERIENCE')",
+        "language detection should not lock onto a single language",
+        "bullet text in a different language from its heading"
+      ]
+    },
+    {
+      "file": "07_tables_layout.docx",
+      "category": "CV laid out entirely in tables (incl. one nested table)",
+      "format": "docx",
+      "pages": 1,
+      "language": ["fr"],
+      "needs_ocr": false,
+      "person_id": "karim_haddad",
+      "expected": {
+        "full_name": "Karim Haddad",
+        "title": "Chef de projet informatique",
+        "email": "karim.haddad@outlook.fr",
+        "phone": ["+216 71 902 334", "+216 98 776 201"],
+        "location": "Lac 2, 1053 Tunis",
+        "age": 42,
+        "employers": ["Vermeg", "BFI Groupe", "STB Bank", "Groupe HLI"],
+        "current_employer": "Vermeg",
+        "education": ["Faculté des Sciences de Monastir", "ISG Sousse"],
+        "certifications": ["PMP"],
+        "skills": ["Agile", "Scrum", "SAFe", "MS Project", "Jira", "Confluence", "Java", "Spring", "Angular", "Oracle PL/SQL", "Jenkins"],
+        "languages": ["Arabe", "Français", "Anglais", "Allemand"]
+      },
+      "tests": [
+        "read text inside w:tbl elements (python-docx paragraphs alone miss it)",
+        "recurse into a nested table for the skills matrix",
+        "keep the date column linked to the job in the adjacent cell",
+        "two phone numbers on one line",
+        "references section contains a third-party email that must NOT become the candidate email"
+      ]
+    },
+    {
+      "file": "08_multipage.pdf",
+      "category": "multi-page CV (3 pages)",
+      "format": "pdf",
+      "pages": 3,
+      "language": ["en"],
+      "needs_ocr": false,
+      "person_id": "leila_bouzid",
+      "expected": {
+        "full_name": "Leila Bouzid",
+        "title": "Head of Data Science",
+        "email": "leila.bouzid@researchmail.org",
+        "phone": "+33 6 74 22 91 05",
+        "location": "Lyon, France",
+        "years_experience": 14,
+        "employers": ["Vinci Mobility", "Doctolib", "Criteo", "Orange Labs", "INRIA"],
+        "current_employer": "Vinci Mobility",
+        "education": ["Université Grenoble Alpes", "Université Paris-Saclay", "SUP'COM Tunis"],
+        "publications_count": 8,
+        "patents": ["FR3098765", "EP3456789"],
+        "skills": ["Python", "R", "Scala", "SQL", "PyTorch", "scikit-learn", "XGBoost", "MLflow", "Spark", "Airflow", "dbt", "Snowflake", "GCP", "Kubernetes"],
+        "languages": ["French", "Arabic", "English", "Spanish"]
+      },
+      "tests": [
+        "sections that continue across a page break must not be split into two entries",
+        "the repeated footer 'Leila Bouzid — Curriculum Vitae / Page N' must be stripped",
+        "publication and reference emails must not override the candidate email",
+        "5 work experiences, none dropped"
+      ]
+    },
+    {
+      "file": "09_missing_email.pdf",
+      "category": "no email address anywhere",
+      "format": "pdf",
+      "pages": 1,
+      "language": ["en"],
+      "needs_ocr": false,
+      "person_id": "mehdi_gharbi",
+      "expected": {
+        "full_name": "Mehdi Gharbi",
+        "title": "DevOps / Site Reliability Engineer",
+        "email": null,
+        "phone": "00216 55 302 887",
+        "location": "Ariana, Tunisia",
+        "github": "github.com/mgharbi-ops",
+        "linkedin": "linkedin.com/in/mehdigharbi",
+        "years_experience": 6,
+        "employers": ["Talan Tunisie", "Sofrecom Tunisie", "Tunisie Telecom"],
+        "education": ["ISI Ariana"],
+        "skills": ["Kubernetes", "Docker", "Terraform", "Ansible", "GitLab CI", "ArgoCD", "AWS", "Prometheus", "Grafana"],
+        "languages": ["Arabic", "French", "English"]
+      },
+      "tests": [
+        "email must be null, not hallucinated and not taken from a URL",
+        "record should still be accepted/flagged rather than rejected outright",
+        "phone uses 00216 instead of +216"
+      ]
+    },
+    {
+      "file": "10_weird_formatting.pdf",
+      "category": "hostile formatting",
+      "format": "pdf",
+      "pages": 1,
+      "language": ["fr"],
+      "needs_ocr": false,
+      "person_id": "sofiane_zouari",
+      "expected": {
+        "full_name": "Sofiane Zouari",
+        "title": "Marketing & Communication",
+        "email": "sofiane.zouari@yahoo.fr",
+        "email_as_written": "sofiane . zouari (at) yahoo . fr",
+        "phone": "+216 92 664 105",
+        "phone_as_written": "21 6 - 92 - 664 - 105",
+        "location": "Sfax",
+        "date_of_birth": "1988-06-07",
+        "years_experience": 10,
+        "employers": ["Groupe Delice", "Poulina Group Holding", "Sté Tunisienne de Diffusion", "Freelance"],
+        "current_employer": "Groupe Delice",
+        "education": ["FSEG Sfax", "Lycée Habib Bourguiba Sfax"],
+        "skills": ["SEO", "SEA", "Google Analytics", "Community Management", "Photoshop", "Rédaction web", "HubSpot", "Email marketing", "Wordpress"],
+        "languages": ["Arabe", "Français", "Anglais", "Italien"]
+      },
+      "tests": [
+        "two-column layout: naive extraction interleaves the sidebar with the experience column",
+        "obfuscated email '(at)' and spaced dots must be normalised",
+        "name is letter-spaced: 'S O F I A N E   Z O U A R I'",
+        "skill levels are drawn as coloured squares, not text - levels are unrecoverable",
+        "dot leaders in the languages block",
+        "diagonal 'CV 2024' watermark overlaps body text",
+        "footer 'Document généré le ... réf. CV-SZ-2024-v3' is not CV content",
+        "arrows and mixed separators in date ranges (06/2019 → ce jour)"
+      ]
+    },
+    {
+      "file": "11_duplicate_exact.pdf",
+      "category": "duplicate - byte-identical copy of 01",
+      "format": "pdf",
+      "pages": 1,
+      "language": ["en"],
+      "needs_ocr": false,
+      "person_id": "omar_ben_salah",
+      "duplicate_of": "01_en_normal.pdf",
+      "duplicate_type": "exact",
+      "expected": "same as 01_en_normal.pdf",
+      "tests": ["file hash (md5/sha256) dedup should catch this before parsing"]
+    },
+    {
+      "file": "12_duplicate_near_docx.docx",
+      "category": "duplicate - same candidate, different format and wording",
+      "format": "docx",
+      "pages": 1,
+      "language": ["en"],
+      "needs_ocr": false,
+      "person_id": "omar_ben_salah",
+      "duplicate_of": "01_en_normal.pdf",
+      "duplicate_type": "near",
+      "expected": {
+        "full_name": "Omar Ben Salah",
+        "email": "omar.bensalah@gmail.com",
+        "phone": "+216 24 118 903",
+        "employers": ["Paymee", "Instadeep", "Vermeg"],
+        "new_information": "acting tech lead for the merchant onboarding squad since 01/2024"
+      },
+      "tests": [
+        "hash dedup fails here - needs identity matching on email/phone/name",
+        "dates written as 03/2021 instead of 'March 2021'",
+        "the newer document has one extra bullet: merge strategy should keep it",
+        "name is uppercase and centred"
+      ]
+    }
+  ]
+}

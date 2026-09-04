@@ -22,6 +22,8 @@ import argparse
 import json
 import math
 import os
+import re
+import unicodedata
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +33,10 @@ ScoreFn = Callable[[dict[str, Any], str], float]
 
 SPEARMAN_TARGET = 0.75
 STDDEV_TARGET = 5.0
+# Spec §A3 ACs: >=95% of files parse without a blocking error, and field
+# accuracy >=90% on the reference corpus.
+PARSE_SUCCESS_TARGET = 0.95
+FIELD_ACCURACY_TARGET = 0.90
 # Spec §A5 AC: 80% of the scripted dialogues complete without human help.
 DIALOGUE_COMPLETION_TARGET = 0.80
 
@@ -40,6 +46,7 @@ _DIALOGUES = Path(
     os.environ.get("EVALS_DIALOGUES") or _ROOT / "evals" / "golden" / "dialogues.json"
 )
 _REPORTS = Path(os.environ.get("EVALS_REPORTS") or _ROOT / "evals" / "reports")
+_CVS = Path(os.environ.get("EVALS_CVS") or _ROOT / "evals" / "golden" / "cvs")
 
 
 def _rank(values: list[float]) -> list[float]:
@@ -127,6 +134,317 @@ def run_bias_probe(pairs: list[dict[str, Any]], score_fn: ScoreFn) -> dict:
         ok = ok and same
         results.append({"id": p["id"], "a": sa, "b": sb, "equal": same})
     return {"passed": ok, "pairs": results}
+
+
+# --- A3 parser eval (§5.4 "évals parseur") ----------------------------------
+
+
+def _norm_field(value: Any) -> Any:
+    """Compare contact fields on substance, not punctuation.
+
+    Phone numbers are written every possible way — `+216 24 118 903`,
+    `00216 55 302 887`, `21 6 - 92 - 664 - 105` — so digits are compared, with
+    an international prefix normalised away. Emails compare case-insensitively.
+    """
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return [_norm_field(v) for v in value]
+    text = str(value).strip()
+    if not text:
+        return None
+    if "@" in text:
+        return text.lower()
+    digits = re.sub(r"\D", "", text)
+    if len(digits) >= 8:
+        # 00216… and +216… are the same number; keep the last 8 significant digits.
+        return digits[-8:]
+    return text.lower()
+
+
+def _field_matches(expected: Any, actual: Any) -> bool:
+    """True when the parsed value carries the expected content."""
+    exp, act = _norm_field(expected), _norm_field(actual)
+    if exp is None:
+        # `09_missing_email` asserts the parser returns nothing rather than
+        # inventing an address from a URL.
+        return act is None
+    if isinstance(exp, list):
+        return any(e == act for e in exp)
+    if isinstance(act, list):
+        return exp in act
+    if exp == act:
+        return True
+    # Names: accept case/accent-insensitive equality on the collapsed form, so
+    # "Omar Ben Salah" still matches "OMAR BEN SALAH".
+    return str(exp).replace(" ", "") == str(act).replace(" ", "")
+
+
+# --- field extraction & comparison ------------------------------------------
+#
+# The spec (§5.4) wants field accuracy on names, **dates, job titles and
+# skills** — not just contact details. The manifest states ground truth the way
+# a recruiter reads a CV (`employers`, `education`, `title`), while the parser
+# emits nested records (`experiences[].company`, `education[].institution`), so
+# each checked field pairs an extractor with a comparator.
+
+# A list field counts as a hit when the parser recovered this share of the
+# expected entries. Recall, not precision: a CV legitimately lists more skills
+# than the manifest bothers to enumerate.
+LIST_RECALL_TARGET = 0.7
+# Tolerance on total years of experience — CVs rarely state it, it is inferred
+# from date ranges, and a half-year of rounding is not an error.
+YEARS_TOLERANCE = 1.5
+
+
+def _fold(text: Any) -> str:
+    """Accent/case/punctuation-insensitive comparison form."""
+    raw = unicodedata.normalize("NFKD", str(text or ""))
+    stripped = "".join(c for c in raw if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9]+", " ", stripped.lower()).strip()
+
+
+def _text_hit(expected: Any, actual: Any) -> bool:
+    """Containment either way on the folded form.
+
+    "Senior Backend Engineer" matches "Senior Backend Engineer (Payments)", and
+    "ENSI" matches "ENSI Manouba" — a parser that keeps more of the source line
+    than the manifest records has not made a mistake.
+    """
+    exp, act = _fold(expected), _fold(actual)
+    if not exp or not act:
+        return False
+    return exp in act or act in exp
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    return list(value) if isinstance(value, (list, tuple)) else [value]
+
+
+def _experiences(profile: dict[str, Any]) -> list[dict[str, Any]]:
+    return [e for e in _as_list(profile.get("experiences")) if isinstance(e, dict)]
+
+
+def _employers(profile: dict[str, Any]) -> list[str]:
+    return [str(e.get("company") or "") for e in _experiences(profile)]
+
+
+def _institutions(profile: dict[str, Any]) -> list[str]:
+    return [
+        str(e.get("institution") or "")
+        for e in _as_list(profile.get("education"))
+        if isinstance(e, dict)
+    ]
+
+
+# Folded ASCII markers of an ongoing role, plus the non-latin ones matched on
+# the raw text (folding strips non-latin scripts to nothing, and an empty
+# needle would match every value).
+_PRESENT = ("present", "actuel", "current", "now", "aujourd", "ongoing", "en cours")
+_PRESENT_RAW = ("حالي", "الآن")
+
+
+def _is_present(end: Any) -> bool:
+    text = str(end or "")
+    folded = _fold(text)
+    if not folded and not text.strip():
+        return True  # an empty end date means the role is ongoing
+    return any(p in folded for p in _PRESENT) or any(p in text for p in _PRESENT_RAW)
+
+
+def _current_employer(profile: dict[str, Any]) -> str:
+    """The employer of the ongoing role, else the first listed (CVs run newest-first)."""
+    experiences = _experiences(profile)
+    for exp in experiences:
+        if _is_present(exp.get("end")):
+            return str(exp.get("company") or "")
+    return str(experiences[0].get("company") or "") if experiences else ""
+
+
+def _titles(profile: dict[str, Any]) -> list[str]:
+    return [str(e.get("title") or "") for e in _experiences(profile)]
+
+
+_YEAR = re.compile(r"(19|20)\d{2}")
+
+
+def _dates_ok(profile: dict[str, Any]) -> bool:
+    """Structural date check on the extracted experience timeline.
+
+    There is no per-experience date ground truth in the manifest, so this
+    asserts what a correct extraction must satisfy regardless of the CV: every
+    experience carries a start date containing a year, and its end is either
+    ongoing or a year not earlier than the start.
+    """
+    experiences = _experiences(profile)
+    if not experiences:
+        return False
+    for exp in experiences:
+        start = _YEAR.search(str(exp.get("start") or ""))
+        if start is None:
+            return False
+        if _is_present(exp.get("end")):
+            continue
+        end = _YEAR.search(str(exp.get("end") or ""))
+        if end is None or int(end.group()) < int(start.group()):
+            return False
+    return True
+
+
+def list_recall(expected: Any, actual: Any) -> float:
+    """Share of the expected entries the parser recovered (0.0–1.0)."""
+    wanted = [e for e in _as_list(expected) if _fold(e)]
+    if not wanted:
+        return 1.0
+    got = _as_list(actual)
+    return sum(any(_text_hit(w, g) for g in got) for w in wanted) / len(wanted)
+
+
+def _years_hit(expected: Any, actual: Any) -> bool:
+    try:
+        return abs(float(expected) - float(actual)) <= YEARS_TOLERANCE
+    except (TypeError, ValueError):
+        return False
+
+
+# field -> (manifest key or None for a structural check, extractor, comparator)
+_CHECKS: dict[str, tuple[str | None, Callable[[dict], Any], Callable[[Any, Any], bool]]] = {
+    "full_name": ("full_name", lambda p: p.get("full_name"), _field_matches),
+    "email": ("email", lambda p: p.get("email"), _field_matches),
+    "phone": ("phone", lambda p: p.get("phone"), _field_matches),
+    "location": ("location", lambda p: p.get("location"), _text_hit),
+    "title": ("title", _titles, lambda exp, act: any(_text_hit(exp, t) for t in act)),
+    "current_employer": ("current_employer", _current_employer, _text_hit),
+    "employers": (
+        "employers", _employers, lambda e, a: list_recall(e, a) >= LIST_RECALL_TARGET
+    ),
+    "education": (
+        "education", _institutions, lambda e, a: list_recall(e, a) >= LIST_RECALL_TARGET
+    ),
+    "skills": (
+        "skills", lambda p: p.get("skills"),
+        lambda e, a: list_recall(e, a) >= LIST_RECALL_TARGET,
+    ),
+    "languages": (
+        "languages", lambda p: p.get("languages"),
+        lambda e, a: list_recall(e, a) >= LIST_RECALL_TARGET,
+    ),
+    "certifications": (
+        "certifications", lambda p: p.get("certifications"),
+        lambda e, a: list_recall(e, a) >= LIST_RECALL_TARGET,
+    ),
+    "years_experience": ("years_experience", lambda p: p.get("years_experience"), _years_hit),
+    # No manifest key: a structural assertion on the extracted timeline.
+    "dates": (None, _dates_ok, lambda _exp, act: bool(act)),
+}
+
+DEFAULT_PARSER_FIELDS: tuple[str, ...] = (
+    "full_name",
+    "email",
+    "phone",
+    "location",
+    "title",
+    "current_employer",
+    "employers",
+    "education",
+    "skills",
+    "languages",
+    "certifications",
+    "years_experience",
+    "dates",
+)
+
+
+def run_parser_eval(
+    parse_fn: Callable[[str, bytes], dict[str, Any]],
+    *,
+    cv_dir: Path | None = None,
+    fields: tuple[str, ...] = DEFAULT_PARSER_FIELDS,
+) -> dict:
+    """Parse every CV in the reference corpus and score it against the manifest.
+
+    `manifest.json` carries the ground truth per file. Files marked as an exact
+    duplicate are skipped: they are a file-hash concern before parsing, not a
+    parser-accuracy one.
+
+    Accuracy is the share of checked (file, field) pairs the parser got right,
+    across contact fields, job titles, employers, education, skills, languages
+    and the experience timeline (§5.4).
+    """
+    base = cv_dir or _CVS
+    manifest = json.loads((base / "manifest.json").read_text(encoding="utf-8"))
+
+    per_file: list[dict[str, Any]] = []
+    parsed_ok = 0
+    considered = 0
+    field_hits = 0
+    field_total = 0
+    by_field: dict[str, dict[str, int]] = {}
+
+    for entry in manifest["files"]:
+        name = entry["file"]
+        if entry.get("duplicate_type") == "exact":
+            continue
+        considered += 1
+        expected = entry.get("expected")
+        if not isinstance(expected, dict):
+            continue
+
+        row: dict[str, Any] = {"file": name}
+        try:
+            profile = parse_fn(name, (base / name).read_bytes())
+            parsed_ok += 1
+        except Exception as exc:  # noqa: BLE001 — a parse failure is a result
+            row["error"] = f"{type(exc).__name__}: {exc}"[:160]
+            per_file.append(row)
+            continue
+
+        checks: dict[str, bool] = {}
+        for field in fields:
+            spec = _CHECKS.get(field)
+            if spec is None:
+                continue
+            key, extract, compare = spec
+            if key is not None and key not in expected:
+                continue
+            want = expected.get(key) if key is not None else None
+            got = extract(profile)
+            ok = bool(compare(want, got))
+            checks[field] = ok
+            field_hits += int(ok)
+            field_total += 1
+            tally = by_field.setdefault(field, {"checked": 0, "hits": 0})
+            tally["checked"] += 1
+            tally["hits"] += int(ok)
+            if not ok:
+                row[f"{field}_got"] = got
+                row[f"{field}_want"] = want
+        row["checks"] = checks
+        per_file.append(row)
+
+    parse_rate = parsed_ok / considered if considered else 0.0
+    accuracy = field_hits / field_total if field_total else 0.0
+    return {
+        "n": considered,
+        "parsed": parsed_ok,
+        "parse_success": round(parse_rate, 4),
+        "parse_success_target": PARSE_SUCCESS_TARGET,
+        "field_accuracy": round(accuracy, 4),
+        "field_accuracy_target": FIELD_ACCURACY_TARGET,
+        "fields_checked": field_total,
+        "fields": sorted(by_field),
+        "by_field": {
+            f: {
+                **t,
+                "accuracy": round(t["hits"] / t["checked"], 4) if t["checked"] else 0.0,
+            }
+            for f, t in sorted(by_field.items())
+        },
+        "passed": parse_rate >= PARSE_SUCCESS_TARGET and accuracy >= FIELD_ACCURACY_TARGET,
+        "per_file": per_file,
+    }
 
 
 # --- A5 scripted dialogue eval ----------------------------------------------
@@ -324,6 +642,16 @@ def _live_dialogue_fns():
     )
 
 
+def _live_parse_fn():
+    """Real A3 path: extract text, then parse through the LLM gateway."""
+    from orchestrator.agents.parser import extract_text, parse_cv
+
+    def _parse(filename: str, data: bytes) -> dict[str, Any]:
+        return parse_cv(extract_text(filename, data)).model_dump()
+
+    return _parse
+
+
 def _load_golden() -> dict:
     if not _GOLDEN.exists():
         raise FileNotFoundError(
@@ -374,7 +702,61 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--dialogues", action="store_true", help="run the A5 scripted-dialogue eval instead"
     )
+    parser.add_argument(
+        "--parser", action="store_true", help="run the A3 parser eval on the CV corpus instead"
+    )
+    parser.add_argument(
+        "--fields",
+        default="",
+        help="comma-separated subset of parser fields to check "
+        f"(default: {','.join(DEFAULT_PARSER_FIELDS)})",
+    )
     args = parser.parse_args(argv)
+
+    if args.parser:
+        fields = (
+            tuple(f.strip() for f in args.fields.split(",") if f.strip())
+            or DEFAULT_PARSER_FIELDS
+        )
+        unknown = [f for f in fields if f not in _CHECKS]
+        if unknown:
+            parser.error(f"unknown field(s): {', '.join(unknown)}")
+        result = run_parser_eval(_live_parse_fn(), fields=fields)
+        report = {
+            "generated_at": datetime.now(UTC).isoformat(),
+            "mode": "live",
+            "parser": result,
+            "passed": result["passed"],
+        }
+        out = _write_report(report, "parser")
+        print(
+            json.dumps(
+                {k: result[k] for k in (
+                    "n", "parsed", "parse_success", "parse_success_target",
+                    "field_accuracy", "field_accuracy_target", "fields_checked",
+                    "by_field", "passed",
+                )},
+                indent=2,
+            )
+        )
+        misses = [
+            f for f in result["per_file"]
+            if f.get("error") or not all(f.get("checks", {}).values())
+        ]
+        if misses:
+            print("\nfiles with a miss:")
+            for f in misses:
+                if f.get("error"):
+                    print(f"  {f['file']}: {f['error']}")
+                    continue
+                bad = [k for k, ok in f["checks"].items() if not ok]
+                for field in bad:
+                    print(
+                        f"  {f['file']}: {field} -> got {f.get(field + '_got')!r}, "
+                        f"want {f.get(field + '_want')!r}"
+                    )
+        print(f"report -> {_rel(out)}")
+        return 0 if result["passed"] else 1
 
     if args.dialogues:
         consent_fn, answer_fn, coverage_fn = (

@@ -25,9 +25,14 @@ def test_booking_link_uses_calcom_url(monkeypatch):
     assert booking_link(42) == "https://cal.com/welyne/interview?metadata[application_id]=42"
 
 
-def test_booking_link_falls_back_without_env(monkeypatch):
+def test_booking_link_is_empty_without_env(monkeypatch):
+    """No Cal.com page configured = no external link at all.
+
+    The candidate books from the portal's slot buttons; a placeholder cal.com
+    URL would 404 for anyone who clicked it.
+    """
     monkeypatch.delenv("CALCOM_URL", raising=False)
-    assert booking_link(7).endswith("/book/7")
+    assert booking_link(7) == ""
 
 
 def test_interpret_booking_uses_chat_profile(monkeypatch):
@@ -87,6 +92,11 @@ def test_format_slots_and_prompt_include_times():
     assert "1." in listing and "(UTC)" in listing
     prompt = booking_prompt("https://cal.com/book/1", slots, "UTC")
     assert "suggested times" in prompt and "https://cal.com/book/1" in prompt
+
+    # No booking page configured: the slots stand alone, with no dangling "here:".
+    bare = booking_prompt("", slots, "UTC")
+    assert "suggested times" in bare
+    assert "here:" not in bare and "http" not in bare
 
 
 def test_build_ics_is_valid_vevent():

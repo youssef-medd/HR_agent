@@ -14,8 +14,11 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.models.message_log import MessageLog
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.emails import personalize_opener, render_email, send_email
@@ -39,6 +42,146 @@ def _wa_configured() -> bool:
 def _wa_recipient(recipient: str) -> str:
     """Normalise a recipient to the digits Meta expects as the `to` field."""
     return re.sub(r"\D", "", recipient or "")
+
+
+# Meta rejects a send to a number that is not on the test app's recipient list
+# with this code. It is a property of the *recipient*, not a transient failure,
+# so retrying can never succeed.
+_WA_RECIPIENT_NOT_ALLOWED = 131030
+
+
+def wa_recipient_allowed(recipient: str) -> bool:
+    """Whether this WhatsApp app is permitted to message `recipient`.
+
+    A Meta *test* number may only message a handful of pre-registered
+    recipients; every other number 400s with #131030, forever. Set
+    `WHATSAPP_ALLOWED_RECIPIENTS` (comma-separated, any formatting) to that list
+    and a candidate whose CV carries some other number is routed to the
+    web/portal channel instead of wedging the pipeline on an impossible send.
+
+    Unset = no restriction: a production number can message anyone, and stub
+    mode (no credentials) keeps its nominal WhatsApp channel so offline runs
+    still exercise the same path.
+    """
+    digits = _wa_recipient(recipient)
+    if not digits:
+        return False
+    allowed = os.environ.get("WHATSAPP_ALLOWED_RECIPIENTS", "").strip()
+    if not allowed or not _wa_configured():
+        return True
+    return digits in {_wa_recipient(entry) for entry in allowed.split(",") if entry.strip()}
+
+
+class WhatsAppRecipientNotAllowed(WhatsAppSendError):
+    """The number is not on the WhatsApp app's allowed recipient list (#131030)."""
+
+
+def wa_window_open(db: Session, recipient: str) -> bool:
+    """True if this number wrote to us inside WhatsApp's 24h service window.
+
+    WhatsApp only allows free-form text while that window is open; outside it a
+    business-initiated message must be an approved template. Meta does not
+    always reject a late free-form send — it can accept it and quietly drop it —
+    so the window has to be tracked on our side rather than inferred from errors.
+    """
+    digits = _wa_recipient(recipient)
+    if not digits:
+        return False
+    since = datetime.now(UTC) - timedelta(hours=24)
+    row = db.scalar(
+        select(MessageLog)
+        .where(
+            MessageLog.channel == "whatsapp",
+            MessageLog.template_id == "inbound",
+            MessageLog.created_at >= since,
+        )
+        .order_by(MessageLog.id.desc())
+    )
+    # Recipients are stored as the candidate wrote them; compare on digits.
+    if row is None:
+        return False
+    return _wa_recipient(row.recipient) == digits
+
+
+def _wa_deliver_template(recipient: str, body: str) -> str | None:
+    """Send `body` inside the approved utility template's single variable.
+
+    The template is what makes a first contact (or any send after 24h silence)
+    actually arrive. Returns None when no template is configured, so the caller
+    can fall back to plain text.
+    """
+    name = os.environ.get("WHATSAPP_TEMPLATE_NAME", "").strip()
+    if not name or not _wa_configured():
+        return None
+
+    import httpx
+
+    version = os.environ.get("WHATSAPP_API_VERSION", "v23.0")
+    phone_id = os.environ["WHATSAPP_PHONE_ID"]
+    token = os.environ["WHATSAPP_TOKEN"]
+    lang = os.environ.get("WHATSAPP_TEMPLATE_LANG", "en_US")
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": _wa_recipient(recipient),
+        "type": "template",
+        "template": {
+            "name": name,
+            "language": {"code": lang},
+            "components": [
+                {"type": "body", "parameters": [{"type": "text", "text": body}]}
+            ],
+        },
+    }
+    try:
+        resp = httpx.post(
+            f"https://graph.facebook.com/{version}/{phone_id}/messages",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        detail, code = _wa_error(exc.response)
+        if code == _WA_RECIPIENT_NOT_ALLOWED:
+            raise WhatsAppRecipientNotAllowed(detail) from exc
+        # A template still pending approval, renamed, or missing in this
+        # language: fall back to plain text rather than failing the step.
+        return None
+    except httpx.HTTPError:
+        return None
+
+    messages = (resp.json().get("messages") or [{}])
+    return messages[0].get("id")
+
+
+def wa_send(db: Session, recipient: str, body: str) -> tuple[str | None, str]:
+    """Deliver one WhatsApp message the way WhatsApp actually permits.
+
+    Inside the 24h window plain text is allowed and reads naturally. Outside it,
+    only an approved template will arrive, so the message rides in the
+    template's variable. Returns (provider_message_id, mode).
+    """
+    if wa_window_open(db, recipient):
+        return _wa_deliver(recipient, body), "text"
+
+    template_id = _wa_deliver_template(recipient, body)
+    if template_id is not None:
+        return template_id, "template"
+    # No usable template — send as text so offline/stub runs and configured
+    # production numbers both behave as before.
+    return _wa_deliver(recipient, body), "text"
+
+
+def _wa_error(response: Any) -> tuple[str, int | None]:
+    """Meta's error message + numeric code from a failed Cloud API response."""
+    try:
+        err = (response.json() or {}).get("error") or {}
+    except ValueError:
+        return f"HTTP {response.status_code}: {response.text[:200]}", None
+    message = err.get("message") or f"HTTP {response.status_code}"
+    code = err.get("code")
+    return message, int(code) if isinstance(code, int) else None
 
 
 def _wa_deliver(recipient: str, body: str) -> str | None:
@@ -73,6 +216,13 @@ def _wa_deliver(recipient: str, body: str) -> str | None:
             timeout=15.0,
         )
         resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        # Surface Meta's own reason — `raise_for_status` only carries the status,
+        # which turns every misconfiguration into the same opaque "400".
+        detail, code = _wa_error(exc.response)
+        if code == _WA_RECIPIENT_NOT_ALLOWED:
+            raise WhatsAppRecipientNotAllowed(detail) from exc
+        raise WhatsAppSendError(f"WhatsApp send failed: {detail}") from exc
     except httpx.HTTPError as exc:
         raise WhatsAppSendError(f"WhatsApp send failed: {exc}") from exc
 
@@ -102,6 +252,10 @@ def _deliver_notification(recipient: str, subject: str, body: str) -> tuple[str,
     """
     if _looks_like_email(recipient):
         return "email", send_email(recipient, subject, body)
+    if not wa_recipient_allowed(recipient):
+        # Nothing to deliver to — recorded by the caller as a stub send rather
+        # than raising on a number this WhatsApp app may not message.
+        return "whatsapp", None
     return "whatsapp", _wa_deliver(recipient, body)
 
 
@@ -237,12 +391,26 @@ def _send_whatsapp_impl(
 ) -> dict[str, Any]:
     """A5 pre-screening message over WhatsApp. Non-sensitive (no recruiter gate)
     — called from `nodes.prescreen_node` through the idempotency ledger. Delivers
-    via the Meta Cloud API when configured, otherwise records to `_SENT` only."""
-    wa_id = _wa_deliver(recipient, body)
+    via the Meta Cloud API when configured, otherwise records to `_SENT` only.
+
+    A recipient WhatsApp refuses outright (#131030 — not on the app's allowed
+    list) is recorded as `skipped_unreachable` instead of raising: retrying can
+    never succeed, and a candidate must not be stranded mid-conversation because
+    their CV carried a number this WhatsApp app may not message.
+    """
+    status = "stub"
+    mode = "text"
+    try:
+        wa_id, mode = wa_send(db, recipient, body)
+        if wa_id:
+            status = "sent"
+    except WhatsAppRecipientNotAllowed:
+        wa_id = None
+        status = "skipped_unreachable"
     log_message(
         db, application_id=application_id, recipient=recipient, channel="whatsapp",
-        template_id="prescreen_question", rendered_body=body,
-        status="sent" if wa_id else "stub", provider_message_id=wa_id,
+        template_id="prescreen_question" if mode == "text" else "prescreen_question_template",
+        rendered_body=body, status=status, provider_message_id=wa_id,
     )
     entry = {
         "kind": "whatsapp",
@@ -262,11 +430,18 @@ def _send_booking_link_impl(
     called from `nodes.schedule_node` through the idempotency ledger. `body` is
     the full prompt text delivered to the candidate; `link` is retained on the
     record for auditing."""
-    wa_id = _wa_deliver(recipient, body)
+    status = "stub"
+    try:
+        wa_id, _mode = wa_send(db, recipient, body)
+        if wa_id:
+            status = "sent"
+    except WhatsAppRecipientNotAllowed:
+        wa_id = None
+        status = "skipped_unreachable"
     log_message(
         db, application_id=application_id, recipient=recipient, channel="whatsapp",
         template_id="booking_link", rendered_body=body,
-        status="sent" if wa_id else "stub", provider_message_id=wa_id,
+        status=status, provider_message_id=wa_id,
     )
     entry = {
         "kind": "booking_link",
@@ -283,26 +458,100 @@ def _send_interview_confirmation_impl(
     db: Session, application_id: int, recipient: str, when: str, ics: str | None = None
 ) -> dict[str, Any]:
     """A6 — confirm the booked interview. Email carries an ICS invite; a phone
-    candidate gets a plain WhatsApp confirmation. Non-sensitive, ledger-guarded."""
+    candidate gets a plain WhatsApp confirmation. Non-sensitive, ledger-guarded.
+
+    A number WhatsApp refuses is logged as `skipped_unreachable` rather than
+    raised: the interview is already booked, and failing the send here would
+    roll the whole scheduling step back over a message we can never deliver.
+    """
     body = (
         f"Your interview is confirmed for {when}. A calendar invite is attached. "
         "We look forward to speaking with you."
     )
+    status = "stub"
     if _looks_like_email(recipient):
         channel = "email"
         message_id = send_email(recipient, "Your interview is confirmed", body, ics=ics)
     else:
         channel = "whatsapp"
-        message_id = _wa_deliver(recipient, body)
+        try:
+            message_id = _wa_deliver(recipient, body)
+        except WhatsAppRecipientNotAllowed:
+            message_id = None
+            status = "skipped_unreachable"
+    if message_id:
+        status = "sent"
     log_message(
         db, application_id=application_id, recipient=recipient, channel=channel,
         template_id="interview_confirmation", rendered_body=body,
-        status="sent" if message_id else "stub", provider_message_id=message_id,
+        status=status, provider_message_id=message_id,
     )
     entry = {
         "kind": "interview_confirmation", "application_id": application_id,
         "recipient": recipient, "when": when, "channel": channel,
         "message_id": message_id, "has_ics": ics is not None,
+    }
+    _SENT.append(entry)
+    return entry
+
+
+_INTERVIEW_UPDATE_COPY: dict[str, tuple[str, str]] = {
+    "reschedule": (
+        "Your interview has been rescheduled",
+        "Your interview has been moved to {when}{from_clause}. The updated calendar "
+        "invite is attached and replaces the previous one.",
+    ),
+    "cancel": (
+        "Your interview has been cancelled",
+        "Your interview scheduled for {when} has been cancelled. The calendar entry "
+        "is withdrawn; we will contact you shortly about the next step.",
+    ),
+    "no_show": (
+        "We missed you at your interview",
+        "We were not able to meet you at {when}. If something came up, you can pick "
+        "a new time here: {link}",
+    ),
+}
+
+
+def _send_interview_update_impl(
+    db: Session,
+    application_id: int,
+    recipient: str,
+    kind: str,
+    when: str,
+    *,
+    previous_when: str | None = None,
+    link: str = "",
+    ics: str | None = None,
+) -> dict[str, Any]:
+    """A6 — replan / cancellation / no-show notice for an already booked interview.
+
+    Non-sensitive (no rejection, offer or publication), so it is delivered
+    directly like the confirmation it supersedes. The reschedule and cancel
+    variants carry an ICS with the same UID and a bumped SEQUENCE, which is what
+    makes the candidate's calendar update the existing event instead of adding a
+    second one.
+    """
+    subject, template = _INTERVIEW_UPDATE_COPY.get(kind, _INTERVIEW_UPDATE_COPY["reschedule"])
+    from_clause = f" (previously {previous_when})" if previous_when else ""
+    body = template.format(when=when, from_clause=from_clause, link=link or "your portal")
+
+    if _looks_like_email(recipient):
+        channel = "email"
+        message_id = send_email(recipient, subject, body, ics=ics)
+    else:
+        channel = "whatsapp"
+        message_id = _wa_deliver(recipient, body)
+    log_message(
+        db, application_id=application_id, recipient=recipient, channel=channel,
+        template_id=f"interview_{kind}", rendered_body=body,
+        status="sent" if message_id else "stub", provider_message_id=message_id,
+    )
+    entry = {
+        "kind": f"interview_{kind}", "application_id": application_id,
+        "recipient": recipient, "when": when, "previous_when": previous_when,
+        "channel": channel, "message_id": message_id, "has_ics": ics is not None,
     }
     _SENT.append(entry)
     return entry

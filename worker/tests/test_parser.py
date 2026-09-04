@@ -7,6 +7,8 @@ missing CV source routes the application to NEEDS_ATTENTION).
 
 from __future__ import annotations
 
+import shutil
+
 import pytest
 from app.models.application import Application
 
@@ -94,7 +96,7 @@ def test_extract_pages_plaintext_single_page():
 
 
 def test_ocr_fallback_disabled_by_default(monkeypatch):
-    from orchestrator.agents.parser import _apply_ocr_fallback
+    from app.textract import apply_ocr_fallback as _apply_ocr_fallback
 
     monkeypatch.delenv("OCR_ENABLED", raising=False)
     pages = ["", "short"]  # both thin
@@ -104,7 +106,7 @@ def test_ocr_fallback_disabled_by_default(monkeypatch):
 
 
 def test_ocr_fallback_replaces_thin_pages_when_enabled(monkeypatch):
-    from orchestrator.agents.parser import _apply_ocr_fallback
+    from app.textract import apply_ocr_fallback as _apply_ocr_fallback
 
     monkeypatch.setenv("OCR_ENABLED", "1")
     thick = "x" * 300
@@ -115,10 +117,84 @@ def test_ocr_fallback_replaces_thin_pages_when_enabled(monkeypatch):
 
 
 def test_needs_ocr_threshold():
-    from orchestrator.agents.parser import _needs_ocr
+    from app.textract import needs_ocr as _needs_ocr
 
     assert _needs_ocr("x" * 199) is True
     assert _needs_ocr("x" * 200) is False
+
+
+def test_image_cv_without_ocr_reports_ocr_not_unsupported(monkeypatch):
+    """An image CV is a supported type — the failure must name OCR, so the
+    recruiter is told to provision it rather than that the file is wrong."""
+    from orchestrator.agents.parser import CVParseError, extract_pages
+
+    monkeypatch.delenv("OCR_ENABLED", raising=False)
+    with pytest.raises(CVParseError, match="OCR"):
+        extract_pages("cv.png", b"\x89PNG\r\n\x1a\n")
+
+
+def test_image_cv_is_ocred_when_enabled(monkeypatch):
+    from orchestrator.agents.parser import extract_pages
+
+    monkeypatch.setenv("OCR_ENABLED", "1")
+    monkeypatch.setattr(
+        "app.textract.ocr_image_bytes", lambda data: "Mohamed Ali\nPython"
+    )
+    assert extract_pages("cv.jpg", b"jpeg-bytes") == ["Mohamed Ali\nPython"]
+
+
+def test_ocr_failure_surfaces_as_parse_error(monkeypatch):
+    from orchestrator.agents.parser import CVParseError, extract_pages
+
+    monkeypatch.setenv("OCR_ENABLED", "1")
+
+    def _boom(data):
+        raise OSError("cannot identify image file")
+
+    monkeypatch.setattr("app.textract.ocr_image_bytes", _boom)
+    with pytest.raises(CVParseError, match="OCR failed"):
+        extract_pages("cv.png", b"not-an-image")
+
+
+def test_unknown_extension_still_rejected():
+    from orchestrator.agents.parser import CVParseError, extract_pages
+
+    with pytest.raises(CVParseError, match="Unsupported"):
+        extract_pages("cv.xlsx", b"whatever")
+
+
+@pytest.mark.skipif(
+    shutil.which("tesseract") is None, reason="tesseract binary not provisioned"
+)
+def test_scanned_pdf_is_ocred_end_to_end(monkeypatch):
+    """A PDF whose pages are pure images (no text layer) is recovered via OCR.
+
+    Guards the real integration — the mocked tests above would still pass if
+    tesseract were missing or the language packs were wrong.
+    """
+    import pymupdf
+    from app.textract import extract_pages
+    from app.textract import needs_ocr as _needs_ocr
+
+    monkeypatch.setenv("OCR_ENABLED", "1")
+
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "Mohamed Ali", fontsize=20)
+    page.insert_text((72, 130), "Software Engineer", fontsize=14)
+    image = page.get_pixmap(dpi=200).tobytes("png")
+
+    scan = pymupdf.open()
+    scanned_page = scan.new_page()
+    scanned_page.insert_image(scanned_page.rect, stream=image)
+    data = scan.tobytes()
+
+    # Precondition: the wrapped PDF really has no text layer.
+    assert _needs_ocr(pymupdf.open(stream=data, filetype="pdf")[0].get_text())
+
+    text = extract_pages("scan.pdf", data)[0]
+    assert "Mohamed Ali" in text
+    assert "Software Engineer" in text
 
 
 def test_attach_sources_tags_page_and_snippet():
@@ -228,6 +304,45 @@ def test_parse_node_stores_cv_and_advances(db_factory, monkeypatch):
         assert "language" in row.payload
 
 
+def test_parse_node_prefers_the_name_the_applicant_typed(db_factory, monkeypatch):
+    """The apply form prefills the name from the CV and lets the candidate fix
+    it; that correction is what the recruiter must see."""
+    from orchestrator import nodes
+
+    monkeypatch.setattr(
+        nodes, "parse_cv", lambda text, **_: CVData(full_name="JANE D0E", skills=["Python"])
+    )
+    app_id = _seed_app(
+        db_factory, {"cv_text": "JANE D0E, Python developer", "applicant_name": "Jane Doe"}
+    )
+
+    with db_factory() as db:
+        nodes.parse_node(db, {"application_id": app_id, "stage": "RECEIVED", "attempt": 1})
+
+    with db_factory() as db:
+        cv = db.get(Application, app_id).payload["cv"]
+        assert cv["full_name"] == "Jane Doe"
+        # The parser's own reading stays on record.
+        assert cv["parsed_full_name"] == "JANE D0E"
+
+
+def test_parse_node_keeps_the_parsed_name_when_the_form_adds_nothing(db_factory, monkeypatch):
+    from orchestrator import nodes
+
+    monkeypatch.setattr(
+        nodes, "parse_cv", lambda text, **_: CVData(full_name="Jane Doe", skills=["Python"])
+    )
+    app_id = _seed_app(db_factory, {"cv_text": "Jane Doe", "applicant_name": ""})
+
+    with db_factory() as db:
+        nodes.parse_node(db, {"application_id": app_id, "stage": "RECEIVED", "attempt": 1})
+
+    with db_factory() as db:
+        cv = db.get(Application, app_id).payload["cv"]
+        assert cv["full_name"] == "Jane Doe"
+        assert "parsed_full_name" not in cv
+
+
 def test_parse_node_routes_to_needs_attention_without_cv(db_factory):
     from orchestrator import nodes
 
@@ -240,3 +355,49 @@ def test_parse_node_routes_to_needs_attention_without_cv(db_factory):
     with db_factory() as db:
         row = db.get(Application, app_id)
         assert row.state == "NEEDS_ATTENTION"
+
+
+def test_docx_reads_content_inside_tables():
+    """A CV laid out in tables must not extract as an empty document.
+
+    `document.paragraphs` alone returns almost nothing for these templates —
+    the reference corpus file `07_tables_layout.docx` dropped from 1388 chars
+    to 59 before this was handled.
+    """
+    import io
+
+    from app.textract import extract_text
+    from docx import Document
+
+    doc = Document()
+    table = doc.add_table(rows=1, cols=2)
+    table.cell(0, 0).text = "2020 - present"
+    table.cell(0, 1).text = "Chef de projet senior, Vermeg"
+    buf = io.BytesIO()
+    doc.save(buf)
+
+    text = extract_text("cv.docx", buf.getvalue())
+    assert "Vermeg" in text
+    # Date and job stay on one line, so the date is not orphaned from its role.
+    assert "2020 - present\tChef de projet senior, Vermeg" in text
+
+
+def test_arabic_presentation_forms_are_normalised():
+    """Arabic PDFs store shaped glyphs that compare unequal to canonical letters."""
+    from app.textract import normalize_extracted
+
+    assert normalize_extracted("ﻳﺎﺳﻴﻦ ﺍﻟﻄﺮﺍﺑﻞﺴﻲ") == "ياسين الطرابلسي"
+
+
+def test_obfuscated_contacts_are_normalised():
+    """Candidates hide contacts from scrapers; the model copies what it sees."""
+    from orchestrator.agents.parser import normalize_email, normalize_name, normalize_phone
+
+    assert normalize_email("sofiane . zouari (at) yahoo . fr") == "sofiane.zouari@yahoo.fr"
+    # A URL is not an address — `09_missing_email.pdf` expects nothing here.
+    assert normalize_email("github.com/mgharbi-ops") == ""
+    assert normalize_phone("21 6 - 92 - 664 - 105") == "+21692664105"
+    assert normalize_phone("00216 55 302 887") == "+21655302887"
+    assert normalize_phone("55 214 803") == "55214803"  # local, no country code
+    assert normalize_name("S O F I A N E   Z O U A R I") == "SOFIANE ZOUARI"
+    assert normalize_name("Omar Ben Salah") == "Omar Ben Salah"

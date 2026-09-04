@@ -34,6 +34,8 @@ def test_configured_mode_posts_to_meta(db, monkeypatch):
     monkeypatch.setenv("WHATSAPP_TOKEN", "tok")
     monkeypatch.setenv("WHATSAPP_PHONE_ID", "12345")
     monkeypatch.setenv("WHATSAPP_API_VERSION", "v23.0")
+    # No template configured -> plain text, which is what this test pins down.
+    monkeypatch.delenv("WHATSAPP_TEMPLATE_NAME", raising=False)
 
     captured: dict = {}
 

@@ -44,6 +44,12 @@ celery.conf.beat_schedule = {
         "task": "orchestrator.send_interview_reminders",
         "schedule": float(os.environ.get("REMINDER_POLL_SECONDS", "3600")),
     },
+    # A6 — flag interviews whose slot elapsed with no outcome (no-show).
+    # Idempotent per application (no_show flag).
+    "detect-no-shows": {
+        "task": "orchestrator.detect_no_shows",
+        "schedule": float(os.environ.get("NO_SHOW_POLL_SECONDS", "900")),
+    },
     # RGPD §7 — anonymise applications past the retention limit. Daily.
     "purge-expired-applications": {
         "task": "orchestrator.purge_expired_applications",

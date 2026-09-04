@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import interviews
 from app.agents.onboarder import OnboardingKit, generate_onboarding_kit
 from app.db import get_db
 from app.models.application import Application
@@ -27,7 +28,11 @@ from app.security import require_role
 
 router = APIRouter(prefix="/applications", tags=["applications"])
 
-_ALLOWED_EXT = (".pdf", ".docx", ".txt", ".md")
+# Images are accepted because A3 OCRs a photographed / scanned CV.
+_ALLOWED_EXT = (
+    ".pdf", ".docx", ".txt", ".md",
+    ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp",
+)
 _MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
@@ -51,6 +56,7 @@ class ApplicationView(BaseModel):
 class ApplicationSummary(BaseModel):
     id: int
     job_id: int
+    job_title: str | None = None
     candidate_ref: str
     state: str
     full_name: str | None = None
@@ -117,10 +123,14 @@ def list_applications(
     db: Annotated[Session, Depends(get_db)],
 ) -> list[ApplicationSummary]:
     rows = db.scalars(select(Application).order_by(Application.id.desc())).all()
+    # One lookup for every job so the UI can label rows with the posting title
+    # instead of a bare id.
+    titles = {j.id: j.title for j in db.scalars(select(Job)).all()}
     return [
         ApplicationSummary(
             id=r.id,
             job_id=r.job_id,
+            job_title=titles.get(r.job_id),
             candidate_ref=r.candidate_ref,
             state=r.state,
             full_name=(r.payload.get("cv") or {}).get("full_name") or None,
@@ -212,6 +222,134 @@ def get_application(
         score=row.payload.get("score"),
         prescreen=row.payload.get("prescreen"),
     )
+
+
+# --- A6 interview lifecycle (recruiter side) --------------------------------
+
+
+class InterviewView(BaseModel):
+    application_id: int
+    state: str
+    booked: bool = False
+    scheduled_at: str | None = None
+    when: str | None = None
+    timezone: str = "UTC"
+    link: str = ""
+    no_show: bool = False
+    outcome: str | None = None
+    reminder_sent: bool = False
+    reschedule_count: int = 0
+    proposed_slots: list[str] = []
+    history: list[dict[str, Any]] = []
+
+
+class InterviewRescheduleIn(BaseModel):
+    start: str  # ISO-8601
+    reason: str | None = None
+
+
+class InterviewCancelIn(BaseModel):
+    reason: str | None = None
+
+
+def _interview_view(row: Application) -> InterviewView:
+    block = interviews.block_of(row)
+    return InterviewView(
+        application_id=row.id,
+        state=row.state,
+        booked=bool(block.get("booked")) or row.state == "INTERVIEW_SCHEDULED",
+        scheduled_at=block.get("scheduled_at"),
+        when=block.get("when"),
+        timezone=block.get("timezone") or "UTC",
+        link=block.get("link") or "",
+        no_show=bool(block.get("no_show")),
+        outcome=block.get("outcome"),
+        reminder_sent=bool(block.get("reminder_sent")),
+        reschedule_count=int(block.get("reschedule_count") or 0),
+        proposed_slots=[str(s) for s in (block.get("proposed_slots") or [])],
+        history=list(block.get("history") or []),
+    )
+
+
+def _interview_row(db: Session, application_id: int) -> Application:
+    row = db.get(Application, application_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
+    return row
+
+
+@router.get("/{application_id}/interview", response_model=InterviewView)
+def interview_view(
+    application_id: int,
+    user: Annotated[User, Depends(require_role("admin", "recruiter", "viewer"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> InterviewView:
+    """A6 — the interview block: slot, invite state, replan history, no-show flag."""
+    return _interview_view(_interview_row(db, application_id))
+
+
+@router.post("/{application_id}/interview/reschedule", response_model=InterviewView)
+def interview_reschedule(
+    application_id: int,
+    body: InterviewRescheduleIn,
+    user: Annotated[User, Depends(require_role("admin", "recruiter"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> InterviewView:
+    """Recruiter moves the interview; the candidate gets a replacement invite."""
+    row = _interview_row(db, application_id)
+    try:
+        start = interviews.parse_slot(body.start)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid start timestamp"
+        ) from None
+    try:
+        interviews.reschedule(
+            db, row, start=start, source="recruiter", actor=user.email, reason=body.reason
+        )
+    except interviews.InterviewError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return _interview_view(row)
+
+
+@router.post("/{application_id}/interview/no-show", response_model=InterviewView)
+def interview_no_show(
+    application_id: int,
+    user: Annotated[User, Depends(require_role("admin", "recruiter"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> InterviewView:
+    """Record a no-show: opens an attention item and nudges the candidate to rebook."""
+    row = _interview_row(db, application_id)
+    interviews.mark_no_show(db, row, source="recruiter", actor=user.email)
+    return _interview_view(row)
+
+
+@router.post("/{application_id}/interview/attended", response_model=InterviewView)
+def interview_attended(
+    application_id: int,
+    user: Annotated[User, Depends(require_role("admin", "recruiter"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> InterviewView:
+    """Confirm the candidate showed up — stops the no-show sweep for this row."""
+    row = _interview_row(db, application_id)
+    interviews.mark_attended(db, row, actor=user.email)
+    return _interview_view(row)
+
+
+@router.post("/{application_id}/interview/cancel", response_model=InterviewView)
+def interview_cancel(
+    application_id: int,
+    body: InterviewCancelIn,
+    user: Annotated[User, Depends(require_role("admin", "recruiter"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> InterviewView:
+    """Cancel the interview: withdraws the calendar event and queues a human decision."""
+    row = _interview_row(db, application_id)
+    try:
+        interviews.cancel(db, row, source="recruiter", actor=user.email, reason=body.reason)
+    except interviews.InterviewError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return _interview_view(row)
 
 
 @router.post("/{application_id}/onboarding", response_model=OnboardingKit)

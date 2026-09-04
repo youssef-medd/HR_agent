@@ -24,10 +24,15 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
+from app.interviews import InterviewError, book_slot, cancel, parse_slot, reschedule
 from app.models.application import Application
 from app.queue import enqueue_application_step
 
 router = APIRouter(prefix="/webhooks/calcom", tags=["webhooks"])
+
+# Cal.com trigger events we act on. Everything else (payment, meeting-ended,
+# form submissions) is acknowledged and dropped.
+_HANDLED = {"BOOKING_CREATED", "BOOKING_RESCHEDULED", "BOOKING_CANCELLED"}
 
 
 def _signature_ok(raw: bytes, header: str | None) -> bool:
@@ -65,7 +70,8 @@ async def receive(
     except ValueError:
         return {"status": "ignored"}
 
-    if body.get("triggerEvent") != "BOOKING_CREATED":
+    event = body.get("triggerEvent")
+    if event not in _HANDLED:
         return {"status": "ignored"}
 
     payload = body.get("payload") or {}
@@ -74,19 +80,43 @@ async def receive(
         return {"status": "ignored"}
 
     row = db.get(Application, app_id)
-    if row is None or row.state != "PRESCREENED":
+    if row is None:
         return {"status": "ignored"}
 
-    when = payload.get("startTime") or "the scheduled time"
-    # Persist the concrete start time so the schedule node + reminder job have a
-    # real datetime anchor (the resume message is only free text).
     start_time = payload.get("startTime")
-    if start_time:
-        interview = dict((row.payload or {}).get("interview") or {})
-        interview["scheduled_at"] = start_time
-        row.payload = {**(row.payload or {}), "interview": interview}
-        db.commit()
-    enqueue_application_step(
-        app_id, {"candidate_message": f"I booked the interview for {when} via Cal.com."}
-    )
+
+    if event == "BOOKING_CREATED":
+        if row.state != "PRESCREENED":
+            return {"status": "ignored"}
+        # Persist the concrete start time so the schedule node + reminder job
+        # have a real datetime anchor (the resume message is only free text).
+        if start_time:
+            try:
+                book_slot(db, row, start=parse_slot(str(start_time)), source="calcom")
+            except ValueError:
+                pass
+        when = start_time or "the scheduled time"
+        enqueue_application_step(
+            app_id, {"candidate_message": f"I booked the interview for {when} via Cal.com."}
+        )
+        return {"status": "ok"}
+
+    # Replan / cancellation of an already booked interview. By now the graph is
+    # parked on the A7 offer gate, so these are row-level lifecycle changes
+    # rather than a graph resume.
+    if row.state != "INTERVIEW_SCHEDULED":
+        return {"status": "ignored"}
+
+    try:
+        if event == "BOOKING_RESCHEDULED":
+            if not start_time:
+                return {"status": "ignored"}
+            reschedule(
+                db, row, start=parse_slot(str(start_time)), source="calcom",
+                reason=payload.get("rescheduleReason") or None,
+            )
+        else:  # BOOKING_CANCELLED
+            cancel(db, row, source="calcom", reason=payload.get("cancellationReason") or None)
+    except (ValueError, InterviewError):
+        return {"status": "ignored"}
     return {"status": "ok"}

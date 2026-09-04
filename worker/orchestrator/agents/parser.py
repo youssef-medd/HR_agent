@@ -1,12 +1,15 @@
 """A3 — CV ingestion & parsing.
 
-Turns a raw CV (PDF / DOCX / plain text) into a validated `CVData` record.
+Turns a raw CV (PDF / DOCX / image / plain text) into a validated `CVData`
+record.
 
 Two stages:
 
 1. `extract_text` — deterministic text extraction. PyMuPDF for PDF, python-docx
-   for DOCX, passthrough for plain text/markdown. OCR (Tesseract) is a later
-   fallback for scanned PDFs (ADR-006) and is intentionally not wired here yet.
+   for DOCX, passthrough for plain text/markdown. A PDF page whose text layer is
+   thinner than `OCR_MIN_CHARS` is treated as a scan and re-read with Tesseract
+   (ADR-006); an image CV has no text layer at all and goes straight to OCR.
+   Both need `OCR_ENABLED` plus a provisioned `tesseract` binary.
 2. `parse_cv` — sends the extracted text through the LLM gateway's `extractor`
    profile in JSON mode and validates the response into `CVData`. Deterministic
    (`temperature=0`, `seed=42`) so a persisted parse is reproducible from
@@ -19,14 +22,24 @@ field faithfully.
 
 from __future__ import annotations
 
-import os
 import re
 from datetime import UTC, datetime
 
 from app.gateway import llm_call
+from app.textract import (
+    IMAGE_EXT as _IMAGE_EXT,
+)
+from app.textract import (
+    OCR_MIN_CHARS as _OCR_MIN_CHARS,
+)
+from app.textract import (
+    TextExtractionError,
+    extract_pages,
+    extract_text,
+)
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
-PROMPT_VERSION = "cv_parse@v2"
+PROMPT_VERSION = "cv_parse@v3"
 # Bumped when extraction/post-processing logic changes; stored with each parse
 # so a persisted profile is reproducible from (model, prompt_version, parser).
 PARSER_VERSION = "a3-parser@v2"
@@ -120,91 +133,34 @@ class CVData(BaseModel):
         return out
 
 
-class CVParseError(RuntimeError):
-    """Raised when no text can be extracted from the source document."""
+# A3's error type IS the shared extraction error, so `except CVParseError`
+# keeps catching extraction failures after the move to `app.textract`.
+CVParseError = TextExtractionError
 
 
-# OCR fallback (spec §A3): when a PDF page's text layer is thinner than this,
-# the page is likely a scan and is re-read with Tesseract. Off unless
-# OCR_ENABLED is truthy and pytesseract + the tesseract binary are installed.
-OCR_MIN_CHARS = 200
+# Text extraction lives in `app.textract` — the API needs the same code to
+# pre-fill the application form from a dropped CV, so it cannot live in the
+# worker package. Re-exported here because `extract_pages` / `extract_text` /
+# `OCR_MIN_CHARS` are A3's documented surface.
+OCR_MIN_CHARS = _OCR_MIN_CHARS
+IMAGE_EXT = _IMAGE_EXT
 
-
-def _ocr_enabled() -> bool:
-    return os.environ.get("OCR_ENABLED", "").strip().lower() in {"1", "true", "yes"}
-
-
-def _needs_ocr(page_text: str) -> bool:
-    return len(page_text.strip()) < OCR_MIN_CHARS
-
-
-def _ocr_langs() -> str:
-    return os.environ.get("OCR_LANGS", "fra+eng+ara")
-
-
-def _apply_ocr_fallback(pages: list[str], ocr_provider) -> list[str]:
-    """Replace thin (likely-scanned) pages with OCR text when enabled.
-
-    `ocr_provider(index) -> str` renders + OCRs page `index`. Pure/​testable:
-    the fitz rendering is injected, not imported here.
-    """
-    if not _ocr_enabled() or ocr_provider is None:
-        return pages
-    out: list[str] = []
-    for i, text in enumerate(pages):
-        if _needs_ocr(text):
-            try:
-                ocr_text = ocr_provider(i)
-            except Exception:  # noqa: BLE001 - OCR is best-effort, never fatal
-                ocr_text = ""
-            out.append(ocr_text or text)
-        else:
-            out.append(text)
-    return out
-
-
-def _ocr_pdf_page(doc, index: int) -> str:
-    """Render one PDF page to an image and OCR it (lazy, optional deps)."""
-    import pytesseract  # optional; only present where OCR is provisioned
-
-    page = doc[index]
-    pix = page.get_pixmap(dpi=200)
-    return pytesseract.image_to_string(pix.tobytes("png"), lang=_ocr_langs())
-
-
-def extract_pages(filename: str, data: bytes) -> list[str]:
-    """Extract text per page, dispatching on extension.
-
-    PDF yields one entry per page (for source-page traceability); DOCX and
-    plain text yield a single entry. Thin PDF pages fall back to OCR when
-    OCR_ENABLED is set. Lazy-imports the heavy parsers.
-    """
-    name = filename.lower()
-
-    if name.endswith(".pdf"):
-        import fitz  # PyMuPDF
-
-        with fitz.open(stream=data, filetype="pdf") as doc:
-            pages = [page.get_text() for page in doc]
-            return _apply_ocr_fallback(pages, lambda i: _ocr_pdf_page(doc, i))
-    elif name.endswith(".docx"):
-        import io
-
-        from docx import Document
-
-        doc = Document(io.BytesIO(data))
-        return ["\n".join(p.text for p in doc.paragraphs)]
-    elif name.endswith((".txt", ".md")):
-        return [data.decode("utf-8", errors="replace")]
-    raise CVParseError(f"Unsupported CV file type: {filename!r}")
-
-
-def extract_text(filename: str, data: bytes) -> str:
-    """Extract plain text from CV bytes (all pages joined)."""
-    text = "\n".join(extract_pages(filename, data)).strip()
-    if not text:
-        raise CVParseError(f"No text extracted from {filename!r} (scanned PDF? OCR not wired yet)")
-    return text
+__all__ = [
+    "CVData",
+    "CVParseError",
+    "Education",
+    "Experience",
+    "IMAGE_EXT",
+    "OCR_MIN_CHARS",
+    "PARSER_VERSION",
+    "PROMPT_VERSION",
+    "attach_sources",
+    "compute_years_experience",
+    "detect_language",
+    "extract_pages",
+    "extract_text",
+    "parse_cv",
+]
 
 
 def attach_sources(cv: CVData, pages: list[str]) -> CVData:
@@ -238,6 +194,11 @@ _SYSTEM_PROMPT = (
     "You are a precise CV parser. Extract the candidate's details from the CV text "
     "into the requested JSON schema. Rules:\n"
     "- full_name: the candidate's name, usually the most prominent line at the top.\n"
+    "- email / phone: the candidate's contact details. ALWAYS extract these when "
+    "present — they are often on one header line next to each other, or beside an "
+    "icon. Keep the phone exactly as written, including its country code. These "
+    "identify the candidate across applications, so never skip them.\n"
+    "- location: the candidate's city / country, if stated.\n"
     "- links: any profile/portfolio URLs (LinkedIn, GitHub, personal site).\n"
     "- skills: aggregate ALL technologies, tools, frameworks and languages mentioned "
     "anywhere in the CV — including tech stacks listed inside project or experience "
@@ -303,10 +264,71 @@ def compute_years_experience(experiences: list[Experience]) -> float | None:
     return round(total, 1) if seen else None
 
 
+# Candidates obfuscate contact details to dodge scrapers — "(at)" for @, spaced
+# dots, digits broken up. The model copies what it sees (correctly: it must not
+# invent), so the un-mangling belongs here, in code.
+_AT_FORMS = re.compile(r"\s*(?:\(\s*at\s*\)|\[\s*at\s*\]|\s+at\s+)\s*", re.IGNORECASE)
+_DOT_FORMS = re.compile(r"\s*(?:\(\s*dot\s*\)|\[\s*dot\s*\]|\s+dot\s+)\s*", re.IGNORECASE)
+
+
+def normalize_email(value: str) -> str:
+    """Un-obfuscate an email. Returns "" when the result is not a valid address."""
+    text = (value or "").strip()
+    if not text:
+        return ""
+    text = _AT_FORMS.sub("@", text)
+    text = _DOT_FORMS.sub(".", text)
+    text = re.sub(r"\s*\.\s*", ".", text)  # "yahoo . fr" -> "yahoo.fr"
+    text = text.replace(" ", "")
+    return text.lower() if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", text) else ""
+
+
+def normalize_phone(value: str) -> str:
+    """Collapse a phone number written with stray spaces/dashes.
+
+    "21 6 - 92 - 664 - 105" and "00216 55 302 887" both survive as a usable
+    number; anything without a plausible digit count is dropped rather than
+    stored as junk.
+    """
+    text = (value or "").strip()
+    digits = re.sub(r"\D", "", text)
+    if not 8 <= len(digits) <= 15:
+        return ""
+    if text.startswith("+"):
+        return "+" + digits
+    if digits.startswith("00"):
+        return "+" + digits[2:]
+    # A local number is 8 digits here; anything longer already carries a country
+    # code, so restore the "+" the candidate dropped ("216 92 664 105").
+    return "+" + digits if len(digits) > 10 else digits
+
+
+def normalize_name(value: str) -> str:
+    """Collapse a letter-spaced name: 'S O F I A N E  Z O U A R I'.
+
+    Detected rather than assumed: only collapsed when nearly every whitespace-
+    separated token is a single character, which prose never is.
+    """
+    text = (value or "").strip()
+    if not text:
+        return ""
+    # Split on the wide gaps FIRST — in a letter-spaced name the double space is
+    # the only surviving word boundary, and collapsing whitespace destroys it.
+    words = re.split(r"\s{2,}", text)
+    tokens = text.split()
+    singles = sum(1 for t in tokens if len(t) == 1)
+    if len(tokens) >= 4 and singles >= len(tokens) - 1:
+        return " ".join("".join(w.split()) for w in words if w.strip())
+    return " ".join(tokens)
+
+
 def _postprocess(cv: CVData, raw_text: str) -> CVData:
-    """Deterministic post-processing: language + code-computed experience."""
+    """Deterministic post-processing: contacts, language, computed experience."""
     computed = compute_years_experience(cv.experiences)
     return cv.model_copy(update={
+        "full_name": normalize_name(cv.full_name),
+        "email": normalize_email(cv.email),
+        "phone": normalize_phone(cv.phone) or cv.phone,
         "language": detect_language(raw_text),
         "years_experience": computed if computed is not None else cv.years_experience,
     })

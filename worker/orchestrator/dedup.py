@@ -40,6 +40,126 @@ def _norm_name(name: str) -> str:
     return " ".join((name or "").strip().lower().split())
 
 
+def file_sha256(data: bytes) -> str:
+    """Content hash of an uploaded file.
+
+    Unsalted and unkeyed: this identifies a *document*, not a person, and has to
+    be comparable across candidates. The salted `_hash` above is for PII.
+    """
+    return hashlib.sha256(data).hexdigest()
+
+
+def find_duplicate_file(db: Session, job_id: int, digest: str) -> Any | None:
+    """An earlier application to the same job carrying byte-identical bytes.
+
+    Catches a re-upload before any parsing happens — the cheapest possible
+    duplicate check, and it costs no LLM call.
+    """
+    from app.models.application import Application
+
+    # `.as_string()` rather than `.astext`: the column is a JSON/JSONB variant,
+    # so the postgresql-only accessor is not available on the generic type.
+    return db.scalar(
+        select(Application)
+        .where(
+            Application.job_id == job_id,
+            Application.payload["cv_sha256"].as_string() == digest,
+        )
+        .order_by(Application.id.asc())
+    )
+
+
+# Fields where a later CV should win only if it actually says something. An
+# empty value in the newer parse means "not mentioned this time", not "deleted".
+_SCALAR_FIELDS = (
+    "full_name", "email", "phone", "location", "summary", "language",
+)
+_LIST_FIELDS = ("skills", "languages", "certifications", "links")
+
+
+# Two CVs describe the same certification differently — "AWS Certified Solutions
+# Architect - Associate (2022)" vs "AWS Solutions Architect Associate (2022)".
+# Exact matching keeps both, so the merged profile lists the same credential
+# twice. Compare on a punctuation-stripped form, then fall back to similarity.
+_LIST_ITEM_SIMILARITY = 0.85
+
+
+def _list_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value).lower()).strip()
+
+
+def _same_item(a: str, b: str) -> bool:
+    """Whether two list entries name the same thing."""
+    if a == b:
+        return True
+    # An acronym and its expansion share no character similarity, but every word
+    # of the short form appears in the long one: "ckad 2021" inside "certified
+    # kubernetes application developer ckad 2021".
+    short, long_ = sorted((a, b), key=len)
+    short_words = short.split()
+    if len(short_words) >= 2 and set(short_words) <= set(long_.split()):
+        return True
+    return SequenceMatcher(None, a, b).ratio() >= _LIST_ITEM_SIMILARITY
+
+
+def _union_fuzzy(primary: list[Any], secondary: list[Any]) -> list[str]:
+    """Union two lists, preferring `primary`'s wording, dropping near-duplicates.
+
+    Requiring two words before treating containment as a match keeps "Java" and
+    "JavaScript" apart — one is a substring of the other but they are different
+    skills.
+    """
+    out: list[str] = []
+    keys: list[str] = []
+    for value in list(primary) + list(secondary):
+        text = str(value).strip()
+        key = _list_key(text)
+        if not text or not key:
+            continue
+        if any(_same_item(key, k) for k in keys):
+            continue
+        keys.append(key)
+        out.append(text)
+    return out
+
+
+def merge_profiles(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+    """Merge an earlier parsed profile into the newer one — newest facts win.
+
+    The same person re-applying with an updated CV should not lose history, and
+    should not have a fresh fact overwritten by a stale one. So: the new value
+    wins wherever it is non-empty, the old one fills gaps, lists are unioned
+    (new first, order preserved), and experience/education entries absent from
+    the newer document are appended rather than dropped.
+    """
+    merged = dict(new)
+
+    for field in _SCALAR_FIELDS:
+        if not str(new.get(field) or "").strip() and old.get(field):
+            merged[field] = old[field]
+
+    for field in _LIST_FIELDS:
+        merged[field] = _union_fuzzy(
+            list(new.get(field) or []), list(old.get(field) or [])
+        )
+
+    for field, key_fn in (
+        ("experiences", lambda e: (str(e.get("company", "")).lower(), str(e.get("title", "")).lower())),
+        ("education", lambda e: (str(e.get("institution", "")).lower(), str(e.get("degree", "")).lower())),
+    ):
+        new_entries = list(new.get(field) or [])
+        known = {key_fn(e) for e in new_entries}
+        for entry in old.get(field) or []:
+            if key_fn(entry) not in known:
+                new_entries.append(entry)
+        merged[field] = new_entries
+
+    if new.get("years_experience") is None and old.get("years_experience") is not None:
+        merged["years_experience"] = old["years_experience"]
+
+    return merged
+
+
 def dedup_candidate(db: Session, cv: dict[str, Any]) -> dict[str, Any]:
     """Resolve `cv` to a candidate identity and return a dedup verdict.
 

@@ -25,7 +25,11 @@ from email.utils import parseaddr
 
 from app.models.application import Application
 
-_ALLOWED_EXT = (".pdf", ".docx", ".txt", ".md")
+# Images are accepted because A3 OCRs a photographed / scanned CV.
+_ALLOWED_EXT = (
+    ".pdf", ".docx", ".txt", ".md",
+    ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp",
+)
 
 
 @dataclass

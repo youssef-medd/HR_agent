@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
 from app.models.application import Application
+from app.models.message_log import MessageLog
 from app.queue import enqueue_application_step
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["webhooks"])
@@ -129,8 +130,20 @@ async def receive(
     delivered = 0
     for from_phone, text in _iter_text_messages(payload):
         app_row = _find_application(db, from_phone)
+        # Record the inbound turn even when it matches no application: it opens
+        # WhatsApp's 24h customer-service window for this number, and the sender
+        # checks that window to decide free text vs an approved template.
+        db.add(MessageLog(
+            application_id=app_row.id if app_row is not None else None,
+            recipient=from_phone,
+            channel="whatsapp",
+            template_id="inbound",
+            rendered_body=text,
+            status="received",
+        ))
         if app_row is not None:
             enqueue_application_step(app_row.id, {"candidate_message": text})
             delivered += 1
+    db.commit()
 
     return {"status": "ok", "delivered": str(delivered)}

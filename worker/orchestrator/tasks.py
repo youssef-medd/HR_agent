@@ -10,18 +10,21 @@ recruiter action). Retries are backed off; on final failure a
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.interviews import due_no_shows, mark_no_show
 from app.models.application import Application
 from app.models.job import Job
 from app.models.needs_attention import NeedsAttention
 from app.rgpd import purge_expired
 from celery.utils.log import get_task_logger
 from langgraph.types import Command
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
+from orchestrator.agents.scheduler import build_ics
 from orchestrator.celery_app import celery
 from orchestrator.checkpointer import postgres_saver
 from orchestrator.config import settings
@@ -32,10 +35,13 @@ from orchestrator.email_intake import (
 )
 from orchestrator.emails import portal_link, send_email
 from orchestrator.graph import build_graph
+from orchestrator.idempotency import ConcurrentAttempt, with_ledger
 from orchestrator.side_effects import (
     _send_interview_reminder_impl,
+    _send_interview_update_impl,
     _send_prescreen_invite_impl,
     _send_whatsapp_impl,
+    wa_recipient_allowed,
 )
 
 logger = get_task_logger(__name__)
@@ -62,8 +68,52 @@ def _get_graph():
     return _graph
 
 
+# Namespace for the per-application advisory lock ('WELY'), so the key cannot
+# collide with a lock taken by another part of the system.
+_LOCK_NAMESPACE = 0x57454C59
+
+
+@contextmanager
+def _application_lock(application_id: int):
+    """Serialise graph steps for one application across worker processes.
+
+    Two steps for the same application (a fast candidate reply after a slow
+    one, or a beat job racing a webhook) each load the row into their own
+    session; whichever commits last writes its stale `applications.state` over
+    the other's, silently reverting a transition that the event log still
+    shows. A Postgres session-level advisory lock makes the second step wait
+    for the first instead. No-ops on a non-Postgres URL (the SQLite test DB).
+    """
+    if _engine.dialect.name != "postgresql":
+        yield
+        return
+
+    conn = _engine.connect()
+    try:
+        conn.execute(
+            text("SELECT pg_advisory_lock(:ns, :id)"),
+            {"ns": _LOCK_NAMESPACE, "id": application_id},
+        )
+        conn.commit()
+        yield
+    finally:
+        try:
+            conn.execute(
+                text("SELECT pg_advisory_unlock(:ns, :id)"),
+                {"ns": _LOCK_NAMESPACE, "id": application_id},
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
 @celery.task(bind=True, name="orchestrator.run_application_step", max_retries=3)
 def run_application_step(self, application_id: int, event: dict[str, Any]) -> dict[str, Any]:
+    with _application_lock(application_id):
+        return _run_application_step(self, application_id, event)
+
+
+def _run_application_step(self, application_id: int, event: dict[str, Any]) -> dict[str, Any]:
     try:
         graph = _get_graph()
         config = {"configurable": {"thread_id": str(application_id)}}
@@ -234,7 +284,9 @@ def _process_stale_prescreens(db, *, now: datetime | None = None) -> dict[str, l
         phone = (row.payload or {}).get("phone") or (row.payload or {}).get("cv", {}).get("phone")
 
         if not block.get("reminder_at"):
-            if phone:
+            # Same channel rule as `nodes._prescreen_channel`: a number WhatsApp
+            # cannot deliver to falls back to the emailed portal link.
+            if phone and wa_recipient_allowed(phone):
                 _send_whatsapp_impl(
                     db, row.id, phone,
                     "Just a reminder to finish your quick pre-screening — reply here to continue.",
@@ -290,6 +342,94 @@ def send_interview_reminders() -> dict[str, Any]:
     if reminded:
         logger.info("Interview reminders sent for %s", reminded)
     return {"reminded": reminded}
+
+
+def _interview_update(db, application_id: int, kind: str) -> dict[str, Any] | None:
+    """Send one A6 interview update. Returns the send record, or None if skipped.
+
+    The DB write happened in the API (`app.interviews`); this only renders and
+    delivers. Reschedule/cancel carry an ICS reusing the interview's UID with the
+    block's bumped `sequence`, so the candidate's calendar moves (or drops) the
+    existing event instead of gaining a duplicate.
+    """
+    row = db.get(Application, application_id)
+    if row is None:
+        return None
+    block = (row.payload or {}).get("interview") or {}
+    scheduled_raw = block.get("scheduled_at")
+    if not scheduled_raw:
+        return None
+    try:
+        start = datetime.fromisoformat(str(scheduled_raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=UTC)
+
+    sequence = int(block.get("sequence") or 0)
+    ics = None
+    if kind in ("reschedule", "cancel"):
+        ics = build_ics(
+            start_utc=start,
+            summary="Interview",
+            uid=f"welyne-interview-{application_id}",
+            description=f"Interview for application {application_id}.",
+            sequence=sequence,
+            method="CANCEL" if kind == "cancel" else "REQUEST",
+            organizer=os.environ.get("SMTP_FROM") or os.environ.get("SMTP_USER") or None,
+            attendee=row.candidate_ref if "@" in (row.candidate_ref or "") else None,
+        )
+
+    previous_when = None
+    previous_raw = block.get("previous_scheduled_at")
+    if kind == "reschedule" and previous_raw:
+        try:
+            previous = datetime.fromisoformat(str(previous_raw).replace("Z", "+00:00"))
+            previous_when = previous.strftime("%a %d %b %Y, %H:%M UTC")
+        except ValueError:
+            previous_when = None
+
+    recipient = (row.payload or {}).get("phone") or row.candidate_ref
+    when = block.get("when") or start.strftime("%a %d %b %Y, %H:%M UTC")
+    # Exactly-once per (kind, sequence): a retried task or a duplicated broker
+    # delivery must not send the invite twice.
+    return with_ledger(
+        db, application_id, f"interview_{kind}", sequence + 1,
+        lambda: _send_interview_update_impl(
+            db, application_id, recipient, kind, when,
+            previous_when=previous_when, link=block.get("link") or "", ics=ics,
+        ),
+    )
+
+
+@celery.task(name="orchestrator.send_interview_update")
+def send_interview_update(application_id: int, kind: str) -> dict[str, Any]:
+    """A6 — deliver a reschedule / cancellation / no-show notice to the candidate."""
+    with _db_factory() as db:
+        try:
+            sent = _interview_update(db, application_id, kind)
+        except ConcurrentAttempt:
+            return {"application_id": application_id, "kind": kind, "sent": False}
+        db.commit()
+    return {"application_id": application_id, "kind": kind, "sent": bool(sent)}
+
+
+@celery.task(name="orchestrator.detect_no_shows")
+def detect_no_shows() -> dict[str, Any]:
+    """A6 — beat job: flag interviews whose slot elapsed with no recorded outcome.
+
+    The application stays INTERVIEW_SCHEDULED (the graph is parked on the offer
+    gate); the miss surfaces as an open `interview_no_show` attention item for
+    the recruiter, plus one rebooking nudge to the candidate.
+    """
+    flagged: list[int] = []
+    with _db_factory() as db:
+        for row in due_no_shows(db):
+            mark_no_show(db, row, source="beat")
+            flagged.append(row.id)
+    if flagged:
+        logger.info("Interview no-shows flagged for %s", flagged)
+    return {"no_shows": flagged}
 
 
 @celery.task(name="orchestrator.purge_expired_applications")
@@ -432,3 +572,28 @@ def weekly_admin_digest() -> dict[str, Any]:
     if recipients:
         logger.info("Weekly digest sent to %s", recipients)
     return {"recipients": recipients}
+
+
+@celery.task(name="orchestrator.send_portal_link")
+def send_portal_link(email: str, links: list[dict[str, str]]) -> dict[str, Any]:
+    """Email a candidate their signed portal links (spec §7).
+
+    The API mints the tokens — it owns `JWT_SECRET` — and hands over rendered
+    title/url pairs; SMTP lives here with every other outbound message.
+
+    Fire-and-forget by design: the endpoint answers `sent: true` regardless, so
+    that a failure here cannot be timed to reveal whether the address exists.
+    """
+    if not email or not links:
+        return {"sent": False}
+
+    lines = ["Here are your applications with Welyne:", ""]
+    for link in links:
+        lines.append(f"- {link.get('title', 'Application')}")
+        lines.append(f"  {link.get('url', '')}")
+        lines.append("")
+    lines.append("These links expire in 7 days. You can request a new one any time.")
+
+    send_email(email, "Your Welyne application", "\n".join(lines))
+    logger.info("Portal link sent to %s (%d application(s))", email, len(links))
+    return {"sent": True, "count": len(links)}

@@ -72,6 +72,7 @@ def _drive_to_offer_gate(db_factory, graph, app_id):
     graph.invoke({"application_id": app_id, "stage": "RECEIVED", "attempt": 1}, config=config)
     graph.invoke(Command(resume={"candidate_message": "yes"}), config=config)      # consent
     graph.invoke(Command(resume={"candidate_message": "6 years"}), config=config)  # answer
+    graph.invoke(Command(resume={"decision": "approve"}), config=config)           # invite gate
     graph.invoke(Command(resume={"candidate_message": "booked Tue 3pm"}), config=config)  # booking
     return config
 

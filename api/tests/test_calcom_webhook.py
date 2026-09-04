@@ -1,9 +1,12 @@
-"""Cal.com webhook — BOOKING_CREATED resumes the paused application."""
+"""Cal.com webhook — booking created / rescheduled / cancelled."""
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
+from app import interviews
 from app.config import settings
 
 
@@ -86,6 +89,121 @@ def test_wrong_state_ignored(client, monkeypatch):
     resp = client.post("/webhooks/calcom", json=_booking(app_id))
     assert resp.status_code == 200
     assert enqueued == []
+
+
+def _seed_scheduled(client, start: str) -> int:
+    from app.db import get_db
+    from app.models.application import Application
+
+    db_gen = client.app.dependency_overrides[get_db]()
+    db = next(db_gen)
+    try:
+        row = Application(
+            job_id=1, candidate_ref="cand@x.io", state="INTERVIEW_SCHEDULED",
+            payload={"interview": {
+                "booked": True, "sequence": 0, "reminder_sent": True,
+                "scheduled_at": start, "timezone": "UTC",
+            }},
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row.id
+    finally:
+        db.close()
+
+
+def _interview(client, app_id: int) -> dict:
+    from app.db import get_db
+    from app.models.application import Application
+
+    db_gen = client.app.dependency_overrides[get_db]()
+    db = next(db_gen)
+    try:
+        return (db.get(Application, app_id).payload or {}).get("interview") or {}
+    finally:
+        db.close()
+
+
+def test_booking_created_stamps_the_real_start_time(client, monkeypatch):
+    from app.routers import calcom as calcom_router
+
+    monkeypatch.setattr(calcom_router, "enqueue_application_step", lambda *a, **k: None)
+
+    app_id = _seed_prescreened(client)
+    client.post("/webhooks/calcom", json=_booking(app_id))
+
+    block = _interview(client, app_id)
+    assert interviews.parse_slot(block["scheduled_at"]) == interviews.parse_slot(
+        "2026-07-20T15:00:00Z"
+    )
+    assert block["source"] == "calcom"
+
+
+def test_booking_rescheduled_moves_the_slot(client, monkeypatch):
+    updates: list = []
+    monkeypatch.setattr(interviews, "enqueue_interview_update", lambda *a: updates.append(a))
+
+    old = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+    new = (datetime.now(UTC) + timedelta(days=3)).replace(microsecond=0).isoformat()
+    app_id = _seed_scheduled(client, old)
+
+    resp = client.post("/webhooks/calcom", json={
+        "triggerEvent": "BOOKING_RESCHEDULED",
+        "payload": {
+            "startTime": new, "rescheduleReason": "conflict",
+            "metadata": {"application_id": str(app_id)},
+        },
+    })
+
+    assert resp.status_code == 200
+    block = _interview(client, app_id)
+    assert interviews.parse_slot(block["scheduled_at"]) == interviews.parse_slot(new)
+    assert block["sequence"] == 1 and block["reminder_sent"] is False
+    assert updates == [(app_id, "reschedule")]
+
+
+def test_booking_cancelled_opens_an_attention_item(client, monkeypatch):
+    from app.db import get_db
+    from app.models.needs_attention import NeedsAttention
+
+    monkeypatch.setattr(interviews, "enqueue_interview_update", lambda *a: None)
+
+    app_id = _seed_scheduled(client, (datetime.now(UTC) + timedelta(days=1)).isoformat())
+    resp = client.post("/webhooks/calcom", json={
+        "triggerEvent": "BOOKING_CANCELLED",
+        "payload": {"cancellationReason": "sick", "metadata": {"application_id": str(app_id)}},
+    })
+
+    assert resp.status_code == 200
+    assert _interview(client, app_id)["booked"] is False
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        rows = db.query(NeedsAttention).filter(
+            NeedsAttention.application_id == app_id,
+            NeedsAttention.reason == interviews.CANCELLED_REASON,
+        ).all()
+        assert len(rows) == 1
+    finally:
+        db.close()
+
+
+def test_reschedule_before_the_interview_is_booked_is_ignored(client, monkeypatch):
+    updates: list = []
+    monkeypatch.setattr(interviews, "enqueue_interview_update", lambda *a: updates.append(a))
+
+    app_id = _seed_prescreened(client)  # still PRESCREENED
+    resp = client.post("/webhooks/calcom", json={
+        "triggerEvent": "BOOKING_RESCHEDULED",
+        "payload": {
+            "startTime": "2026-07-21T15:00:00Z",
+            "metadata": {"application_id": str(app_id)},
+        },
+    })
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ignored"
+    assert updates == []
 
 
 def test_signature_rejected_when_secret_set(client, monkeypatch):

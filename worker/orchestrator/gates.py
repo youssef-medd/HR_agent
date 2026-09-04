@@ -134,7 +134,15 @@ def resume_with_decision(
     return row
 
 
-def _assert_approved(db: Session, application_id: int, gate_name: str) -> NeedsAttention:
+def _assert_resolved(
+    db: Session, application_id: int, gate_name: str, *, decision: str
+) -> NeedsAttention:
+    """Load the closed gate row and assert the recruiter's decision.
+
+    `decision` is the human choice that authorises the side effect — "approve"
+    for a send the recruiter opted into, "reject" for a send their *refusal*
+    authorises (declining an interview invite authorises the rejection email).
+    """
     row = db.scalar(
         select(NeedsAttention)
         .where(
@@ -149,11 +157,15 @@ def _assert_approved(db: Session, application_id: int, gate_name: str) -> NeedsA
             f"No closed gate '{gate_name}' for application {application_id}"
         )
     resolution = row.resolution or {}
-    if resolution.get("decision") != "approve":
+    if resolution.get("decision") != decision:
         raise GateNotApproved(
-            f"Gate '{gate_name}' for application {application_id} was rejected"
+            f"Gate '{gate_name}' for application {application_id} is not '{decision}'"
         )
     return row
+
+
+def _assert_approved(db: Session, application_id: int, gate_name: str) -> NeedsAttention:
+    return _assert_resolved(db, application_id, gate_name, decision="approve")
 
 
 def execute_after_rejection_gate(
@@ -162,6 +174,23 @@ def execute_after_rejection_gate(
     row = _assert_approved(db, application_id, "rejection")
     _write_audit(db, actor=row.resolved_by or "", action="rejection_sent",
                  application_id=application_id, payload={"template": template})
+    return _send_rejection_impl(db, application_id, recipient, template)
+
+
+def execute_after_interview_declined_gate(
+    db: Session, application_id: int, recipient: str, template: str
+) -> dict[str, Any]:
+    """Rejection email for a candidate the recruiter declined to interview.
+
+    The authorising human decision is the *rejection* of the `interview_invite`
+    gate — a separate `rejection` gate would ask the same recruiter the same
+    question twice — so the row is asserted closed with decision='reject'
+    before the same `_send_rejection_impl` any other rejection goes through.
+    """
+    row = _assert_resolved(db, application_id, "interview_invite", decision="reject")
+    _write_audit(db, actor=row.resolved_by or "", action="rejection_sent",
+                 application_id=application_id,
+                 payload={"template": template, "gate": "interview_invite"})
     return _send_rejection_impl(db, application_id, recipient, template)
 
 

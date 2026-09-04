@@ -30,6 +30,7 @@ from orchestrator.nodes import (
     send_confirmation_node,
     shortlisted_node,
 )
+from orchestrator.state_machine import State, is_terminal
 
 
 def build_graph(db_factory: Callable[[], Session], checkpointer: Any) -> Any:
@@ -40,12 +41,18 @@ def build_graph(db_factory: Callable[[], Session], checkpointer: Any) -> Any:
 
         return _run
 
-    # A node that fails routes the application to NEEDS_ATTENTION. The graph
-    # must stop there rather than fall through to the next linear step (which
-    # would attempt an illegal transition out of NEEDS_ATTENTION).
-    def _halt_if_needs_attention(next_node: str) -> Callable[[NodeState], str]:
+    # A node that fails routes the application to NEEDS_ATTENTION, and a node
+    # that closes it routes to a terminal state (DECLINED after a declined
+    # interview invite). The graph must stop on any of those rather than fall
+    # through to the next linear step, which would attempt an illegal
+    # transition out of a state with no outgoing edges.
+    def _halt_if_terminal(next_node: str) -> Callable[[NodeState], str]:
         def _route(state: NodeState) -> str:
-            return END if state.get("stage") == "NEEDS_ATTENTION" else next_node
+            try:
+                stage = State(state.get("stage"))
+            except ValueError:
+                return next_node
+            return END if is_terminal(stage) else next_node
 
         return _route
 
@@ -75,10 +82,10 @@ def build_graph(db_factory: Callable[[], Session], checkpointer: Any) -> Any:
     graph.add_node("declined", _wrap(declined_node))
 
     graph.add_edge(START, "parse")
-    graph.add_conditional_edges("parse", _halt_if_needs_attention("score"), {END: END, "score": "score"})
+    graph.add_conditional_edges("parse", _halt_if_terminal("score"), {END: END, "score": "score"})
     graph.add_conditional_edges(
         "score",
-        _halt_if_needs_attention("send_confirmation"),
+        _halt_if_terminal("send_confirmation"),
         {END: END, "send_confirmation": "send_confirmation"},
     )
     graph.add_conditional_edges(
@@ -94,10 +101,10 @@ def build_graph(db_factory: Callable[[], Session], checkpointer: Any) -> Any:
     # HIRED, and flows into A8 onboarding (-> ONBOARDING).
     graph.add_edge("shortlisted", "prescreen")
     graph.add_conditional_edges(
-        "prescreen", _halt_if_needs_attention("schedule"), {END: END, "schedule": "schedule"}
+        "prescreen", _halt_if_terminal("schedule"), {END: END, "schedule": "schedule"}
     )
     graph.add_conditional_edges(
-        "schedule", _halt_if_needs_attention("interview"), {END: END, "interview": "interview"}
+        "schedule", _halt_if_terminal("interview"), {END: END, "interview": "interview"}
     )
     graph.add_conditional_edges(
         "interview", _route_after_interview, {END: END, "onboarding": "onboarding"}

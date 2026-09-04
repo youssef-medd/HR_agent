@@ -97,10 +97,20 @@ def build_ics(
     description: str = "",
     uid: str,
     minutes: int = INTERVIEW_MINUTES,
+    sequence: int = 0,
+    method: str = "REQUEST",
+    organizer: str | None = None,
+    attendee: str | None = None,
 ) -> str:
-    """Build a minimal valid iCalendar VEVENT (UTC) for an interview slot."""
+    """Build a minimal valid iCalendar VEVENT (UTC) for an interview slot.
+
+    A replanned interview MUST reuse the same `uid` with a higher `sequence`:
+    that is what makes a calendar client move the existing event instead of
+    adding a second one. `method="CANCEL"` (with the bumped sequence) removes it.
+    """
     end_utc = start_utc + timedelta(minutes=minutes)
     stamp = datetime.now(UTC)
+    cancelled = method.upper() == "CANCEL"
 
     def _z(dt: datetime) -> str:
         return dt.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -108,25 +118,34 @@ def build_ics(
     def _esc(text: str) -> str:
         return text.replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
 
-    return "\r\n".join(
-        [
-            "BEGIN:VCALENDAR",
-            "VERSION:2.0",
-            "PRODID:-//Welyne//Interview//EN",
-            "CALSCALE:GREGORIAN",
-            "METHOD:REQUEST",
-            "BEGIN:VEVENT",
-            f"UID:{uid}",
-            f"DTSTAMP:{_z(stamp)}",
-            f"DTSTART:{_z(start_utc)}",
-            f"DTEND:{_z(end_utc)}",
-            f"SUMMARY:{_esc(summary)}",
-            f"DESCRIPTION:{_esc(description)}",
-            "STATUS:CONFIRMED",
-            "END:VEVENT",
-            "END:VCALENDAR",
-        ]
-    )
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Welyne//Interview//EN",
+        "CALSCALE:GREGORIAN",
+        f"METHOD:{method.upper()}",
+        "BEGIN:VEVENT",
+        f"UID:{uid}",
+        f"SEQUENCE:{sequence}",
+        f"DTSTAMP:{_z(stamp)}",
+        f"DTSTART:{_z(start_utc)}",
+        f"DTEND:{_z(end_utc)}",
+        f"SUMMARY:{_esc(summary)}",
+        f"DESCRIPTION:{_esc(description)}",
+    ]
+    if organizer:
+        lines.append(f"ORGANIZER;CN=Recruiting:mailto:{organizer}")
+    if attendee:
+        lines.append(
+            "ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;"
+            f"RSVP=TRUE:mailto:{attendee}"
+        )
+    lines += [
+        f"STATUS:{'CANCELLED' if cancelled else 'CONFIRMED'}",
+        "END:VEVENT",
+        "END:VCALENDAR",
+    ]
+    return "\r\n".join(lines)
 
 
 class BookingConfirmation(BaseModel):
@@ -139,31 +158,36 @@ class SchedulerError(RuntimeError):
 
 
 def booking_link(application_id: int) -> str:
-    """Cal.com booking link for an application.
+    """External Cal.com booking link for an application, or "" when unconfigured.
 
     When `CALCOM_URL` is set (the recruiter's real Cal.com booking page), the
     application id is attached as booking metadata so the Cal.com
     `BOOKING_CREATED` webhook can map the confirmation back to this application.
-    Without it, a self-describing stub link is used so offline runs still work.
+
+    Without it there is no external page to send anyone to: the candidate books
+    through the portal's own slot buttons. Returning "" keeps a dead link off
+    the portal and out of the message — a placeholder cal.com URL 404s.
     """
     base = os.environ.get("CALCOM_URL")
     if base:
         return f"{base.rstrip('/')}?metadata[application_id]={application_id}"
-    return f"{_DEFAULT_CALCOM_URL}/book/{application_id}"
+    return ""
 
 
 def booking_prompt(
     link: str, slots: list[datetime] | None = None, tz: str = "UTC"
 ) -> str:
+    """The booking message. `link` is wherever the candidate picks a time —
+    the Cal.com page when configured, otherwise their portal."""
     slot_block = ""
     if slots:
         slot_block = "Here are three suggested times:\n" + format_slots(slots, tz) + "\n"
+    where = f"Please pick a time that works for you here: {link}\n" if link else ""
     return (
         "Thanks for completing pre-screening! The next step is a short interview.\n"
         f"{slot_block}"
-        f"Please pick a time that works for you here: {link}\n"
-        "Reply here once you've booked (tell me the slot you chose), or reply NO "
-        "if none of the times work."
+        f"{where}"
+        "Reply with the slot you chose, or reply NO if none of the times work."
     )
 
 

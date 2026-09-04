@@ -43,7 +43,10 @@ LEGAL: dict[State, set[State]] = {
     },
     State.SHORTLISTED: {State.PRESCREENING, State.NEEDS_ATTENTION},
     State.PRESCREENING: {State.PRESCREENED, State.NEEDS_ATTENTION},
-    State.PRESCREENED: {State.INTERVIEW_SCHEDULED, State.NEEDS_ATTENTION},
+    # DECLINED is reachable here because a recruiter rejecting the
+    # `interview_invite` gate is a final "no" on this candidate: the rejection
+    # email goes out on that decision and the application is closed.
+    State.PRESCREENED: {State.INTERVIEW_SCHEDULED, State.DECLINED, State.NEEDS_ATTENTION},
     State.INTERVIEW_SCHEDULED: {State.INTERVIEWED, State.NEEDS_ATTENTION},
     State.INTERVIEWED: {State.OFFER, State.DECLINE_PENDING, State.NEEDS_ATTENTION},
     State.OFFER: {State.HIRED, State.DECLINED, State.NEEDS_ATTENTION},

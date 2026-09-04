@@ -65,9 +65,22 @@ def personalize_opener(
 
 
 def portal_link(email: str, application_id: int) -> str:
-    """Deep link into the candidate portal, prefilled — no reference to memorise."""
+    """Deep link into the candidate portal — nothing to memorise.
+
+    Carries a signed token rather than the raw `application_id` (spec §7): the
+    id is sequential, so anyone knowing a candidate's email could otherwise walk
+    1, 2, 3… until they hit that candidate's transcript. Falls back to the old
+    email+ref form only if token signing is unavailable, so a misconfigured
+    JWT_SECRET degrades to the previous behaviour instead of sending a broken
+    link.
+    """
     base = (os.environ.get("PORTAL_URL") or "http://localhost:3001").rstrip("/")
-    return f"{base}/portal?email={quote(email)}&ref={application_id}"
+    try:
+        from app.portal_token import make_portal_token
+
+        return f"{base}/portal?t={make_portal_token(application_id, email)}"
+    except Exception:  # noqa: BLE001
+        return f"{base}/portal?email={quote(email)}&ref={application_id}"
 
 # Deterministic copy (no LLM) — rejection/offer wording must be consistent and
 # reviewable. `{name}` is filled from context when available. Templates are

@@ -1,0 +1,105 @@
+{
+  "generated_at": "2026-08-31T23:15:13.580495+00:00",
+  "mode": "live",
+  "parser": {
+    "n": 11,
+    "parsed": 11,
+    "parse_success": 1.0,
+    "parse_success_target": 0.95,
+    "field_accuracy": 1.0,
+    "field_accuracy_target": 0.9,
+    "fields_checked": 33,
+    "passed": true,
+    "per_file": [
+      {
+        "file": "01_en_normal.pdf",
+        "checks": {
+          "full_name": true,
+          "email": true,
+          "phone": true
+        }
+      },
+      {
+        "file": "02_fr_normal.docx",
+        "checks": {
+          "full_name": true,
+          "email": true,
+          "phone": true
+        }
+      },
+      {
+        "file": "03_scanned_ocr_needed.pdf",
+        "checks": {
+          "full_name": true,
+          "email": true,
+          "phone": true
+        }
+      },
+      {
+        "file": "04_image_cv_photo.jpg",
+        "checks": {
+          "full_name": true,
+          "email": true,
+          "phone": true
+        }
+      },
+      {
+        "file": "05_ar_arabic.pdf",
+        "checks": {
+          "full_name": true,
+          "email": true,
+          "phone": true
+        }
+      },
+      {
+        "file": "06_mixed_fr_en.pdf",
+        "checks": {
+          "full_name": true,
+          "email": true,
+          "phone": true
+        }
+      },
+      {
+        "file": "07_tables_layout.docx",
+        "checks": {
+          "full_name": true,
+          "email": true,
+          "phone": true
+        }
+      },
+      {
+        "file": "08_multipage.pdf",
+        "checks": {
+          "full_name": true,
+          "email": true,
+          "phone": true
+        }
+      },
+      {
+        "file": "09_missing_email.pdf",
+        "checks": {
+          "full_name": true,
+          "email": true,
+          "phone": true
+        }
+      },
+      {
+        "file": "10_weird_formatting.pdf",
+        "checks": {
+          "full_name": true,
+          "email": true,
+          "phone": true
+        }
+      },
+      {
+        "file": "12_duplicate_near_docx.docx",
+        "checks": {
+          "full_name": true,
+          "email": true,
+          "phone": true
+        }
+      }
+    ]
+  },
+  "passed": true
+}

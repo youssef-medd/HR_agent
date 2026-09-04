@@ -61,10 +61,11 @@ from orchestrator.agents.scorer import (
     check_hard_filters,
     score_candidate,
 )
-from orchestrator.dedup import dedup_candidate
+from orchestrator.dedup import dedup_candidate, file_sha256, find_duplicate_file, merge_profiles
 from orchestrator.emails import portal_link
 from orchestrator.embeddings import store_application_embedding
 from orchestrator.gates import (
+    execute_after_interview_declined_gate,
     execute_after_offer_gate,
     execute_after_rejection_gate,
     require_gate,
@@ -77,6 +78,7 @@ from orchestrator.side_effects import (
     _send_interview_confirmation_impl,
     _send_prescreen_invite_impl,
     _send_whatsapp_impl,
+    wa_recipient_allowed,
 )
 from orchestrator.state_machine import State, transition
 
@@ -136,12 +138,61 @@ def _resolve_cv_pages(payload: dict[str, Any]) -> list[str]:
     raise CVParseError("No CV source on application payload (cv_text / cv_b64 / cv_path)")
 
 
+def _cv_bytes(payload: dict[str, Any]) -> bytes | None:
+    """The uploaded file's raw bytes, for content hashing. None for pasted text."""
+    if payload.get("cv_b64"):
+        import base64
+
+        return base64.b64decode(payload["cv_b64"])
+    if payload.get("cv_path"):
+        try:
+            with open(str(payload["cv_path"]), "rb") as fh:
+                return fh.read()
+        except OSError:
+            return None
+    return None
+
+
+def _apply_form_name(payload: dict[str, Any], cv: dict[str, Any]) -> dict[str, Any]:
+    """The name the applicant typed wins over the one A3 read off the CV.
+
+    The apply form prefills `full_name` from the CV and lets the candidate
+    correct it before submitting, so `applicant_name` is a deliberate human
+    statement of identity while `cv.full_name` is a model's guess. Everything
+    the recruiter sees reads `cv.full_name`, so the correction is applied here,
+    once, before dedup and persistence — the parser's own value is kept under
+    `parsed_full_name` so the extraction stays auditable.
+    """
+    typed = str(payload.get("applicant_name") or "").strip()
+    parsed_name = str(cv.get("full_name") or "").strip()
+    if not typed or typed == parsed_name:
+        return cv
+    return {**cv, "full_name": typed, "parsed_full_name": parsed_name}
+
+
 def parse_node(db: Session, state: NodeState) -> NodeState:
     """A3 — extract structured CV data. Routes to NEEDS_ATTENTION on failure."""
     app_row = db.get(Application, state["application_id"])
     payload = dict(app_row.payload) if app_row is not None else {}
 
+    # Exact re-upload: byte-identical to an earlier application for this job.
+    # Checked before parsing — it is a file-identity question, and reusing the
+    # earlier parse saves the LLM call entirely.
+    reused_from: int | None = None
+    digest: str | None = None
+    raw = _cv_bytes(payload)
+    if raw and app_row is not None:
+        digest = file_sha256(raw)
+        twin = find_duplicate_file(db, app_row.job_id, digest)
+        if twin is not None and twin.id != app_row.id:
+            twin_cv = (twin.payload or {}).get("cv")
+            if isinstance(twin_cv, dict) and twin_cv:
+                reused_from = twin.id
+                parsed_reuse = {"cv": twin_cv, "raw_text": (twin.payload or {}).get("raw_text", "")}
+
     def _work() -> dict[str, Any]:
+        if reused_from is not None:
+            return parsed_reuse
         pages = _resolve_cv_pages(payload)
         raw_text = "\n".join(pages)
         cv = parse_cv(raw_text, user_id=str(state["application_id"]))
@@ -165,11 +216,28 @@ def parse_node(db: Session, state: NodeState) -> NodeState:
         )
         return _advance(db, state, State.NEEDS_ATTENTION, "parse_failed")
 
-    cv_data = parsed["cv"]
+    cv_data = _apply_form_name(payload, parsed["cv"])
     # A3 dedup: resolve to a candidate identity (email/phone hash) and record
     # the verdict. Runs on the node session so the candidate row + attachment
     # commit atomically with the PARSED transition.
     verdict = dedup_candidate(db, cv_data)
+
+    # Re-application: fold the previous profile in, newest facts winning, so an
+    # updated CV neither loses history nor is overwritten by a stale parse.
+    if verdict.get("duplicate") and app_row is not None:
+        prior = db.scalar(
+            select(Application)
+            .where(
+                Application.candidate_id == verdict["candidate_id"],
+                Application.id != app_row.id,
+            )
+            .order_by(Application.id.desc())
+        )
+        prior_cv = (prior.payload or {}).get("cv") if prior is not None else None
+        if isinstance(prior_cv, dict) and prior_cv:
+            cv_data = merge_profiles(prior_cv, cv_data)
+            verdict = {**verdict, "merged_from_application_id": prior.id}
+
     if app_row is not None:
         app_row.candidate_id = verdict["candidate_id"]
         app_row.payload = {
@@ -178,7 +246,17 @@ def parse_node(db: Session, state: NodeState) -> NodeState:
             "raw_text": parsed["raw_text"],
             "parser_version": PARSER_VERSION,
             "language": cv_data.get("language", ""),
-            "dedup": verdict,
+            "dedup": {
+                **verdict,
+                **({"cv_sha256": digest} if digest else {}),
+                **(
+                    {"exact_file_duplicate_of": reused_from}
+                    if reused_from is not None
+                    else {}
+                ),
+            },
+            # Stored at the top level too so `find_duplicate_file` can index it.
+            **({"cv_sha256": digest} if digest else {}),
         }
     state.setdefault("scratch", {})["cv"] = cv_data
     return _advance(db, state, State.PARSED, "parse")
@@ -364,12 +442,16 @@ def _whatsapp_recipient(app_row: Application | None, payload: dict[str, Any]) ->
 
 
 def _prescreen_channel(payload: dict[str, Any]) -> str:
-    """A5 delivery channel: WhatsApp when a real phone is on file, else web chat.
+    """A5 delivery channel: WhatsApp when the number is reachable, else web chat.
 
     Web candidates (apply form / email intake with no phone) pre-screen through
     the candidate portal; the transcript on the payload is the delivery surface.
+    A number WhatsApp cannot deliver to — no credentials, or a Meta *test* app
+    whose allowed-recipient list does not contain it — takes the same web path
+    rather than failing every turn on an impossible send.
     """
-    return "whatsapp" if _resolve_phone(payload) else "web"
+    phone = _resolve_phone(payload)
+    return "whatsapp" if phone and wa_recipient_allowed(phone) else "web"
 
 
 def prescreen_node(db: Session, state: NodeState) -> NodeState:
@@ -589,11 +671,15 @@ def prescreen_node(db: Session, state: NodeState) -> NodeState:
 def schedule_node(db: Session, state: NodeState) -> NodeState:
     """A6 — interview scheduling.
 
-    Sends a Cal.com booking link (stubbed) and pauses until the candidate
-    confirms a booked slot, then advances PRESCREENED -> INTERVIEW_SCHEDULED. A
-    single interrupt keeps the replay deterministic; the send is ledger-guarded
-    (exactly-once) and there is no pre-interrupt transition, so the application
-    simply rests at PRESCREENED while awaiting the booking reply.
+    Two pauses, in order. First the `interview_invite` gate: the spec's trigger
+    is "PRESCREENED *with a positive recruiter opinion*", so no candidate is
+    invited to book until a human says so. Once approved, the booking link goes
+    out and the node pauses again until the candidate confirms a slot, then
+    advances PRESCREENED -> INTERVIEW_SCHEDULED.
+
+    Both sends are ledger-guarded (exactly-once) and no transition happens
+    before either interrupt, so the application rests at PRESCREENED throughout
+    and the replay stays deterministic.
     """
     app_id = state["application_id"]
     attempt = state.get("attempt", 1)
@@ -605,10 +691,49 @@ def schedule_node(db: Session, state: NodeState) -> NodeState:
     if app_row is not None:
         state["stage"] = app_row.state
 
+    # --- Gate: does the recruiter want to interview this candidate? ---------
+    score = payload.get("score") or {}
+    prescreen = payload.get("prescreen") or {}
+    decision = require_gate(db, app_id, "interview_invite", {
+        "candidate": (payload.get("cv") or {}).get("full_name") or (
+            app_row.candidate_ref if app_row is not None else ""
+        ),
+        "score": score.get("overall"),
+        "recommendation": score.get("recommendation"),
+        "prescreen_summary": prescreen.get("summary") or "",
+    })
+    if decision.get("decision") != "approve":
+        block = dict(payload.get("interview") or {})
+        block["invite_declined"] = True
+        _save_interview(db, app_id, block)
+        db.add(ApplicationEvent(
+            application_id=app_id, kind="interview_not_invited", step="interview_invite",
+            attempt=attempt, payload={"decision": decision.get("decision")},
+        ))
+        # A declined invite is a final "no", so the candidate is told directly
+        # rather than left waiting on a silent queue item. The recruiter's
+        # rejection of this gate is the authorising decision (see
+        # `execute_after_interview_declined_gate`); the send is ledger-guarded
+        # and rate-limited like every other rejection.
+        ref = app_row.candidate_ref if app_row is not None else ""
+        if "@" in ref:
+            with_ledger(
+                db, app_id, "send_invite_decline_rejection", attempt,
+                lambda: execute_after_interview_declined_gate(db, app_id, ref, "rejection@v1"),
+            )
+            return _advance(db, state, State.DECLINED, "interview_not_invited")
+        # No email on file: nothing can be sent, so it stays a human's problem.
+        return _advance(db, state, State.NEEDS_ATTENTION, "interview_not_invited")
+
+    # The external Cal.com page when one is configured; otherwise "" — the
+    # candidate books from the portal's own slot buttons, so a WhatsApp message
+    # points there instead of at a link that would 404.
     link = booking_link(app_id)
     tz = candidate_timezone(payload)
     slots = propose_slots(tz)
-    message = booking_prompt(link, slots, tz)
+    ref = app_row.candidate_ref if app_row is not None else ""
+    where = link or (portal_link(ref, app_id) if "@" in ref else "")
+    message = booking_prompt(where, slots, tz)
     # Persist the booking link + proposed slots so a web candidate can open the
     # portal and pick a time; only send over WhatsApp when a real phone is on
     # file (an email recipient would 400 the Meta API).
@@ -621,7 +746,7 @@ def schedule_node(db: Session, state: NodeState) -> NodeState:
     if channel == "whatsapp":
         with_ledger(
             db, app_id, "send_booking_link", attempt,
-            lambda: _send_booking_link_impl(db, app_id, recipient, link, message),
+            lambda: _send_booking_link_impl(db, app_id, recipient, where, message),
         )
     reply = _candidate_message(
         interrupt({"kind": "await_booking", "application_id": app_id, "link": link})
@@ -657,18 +782,27 @@ def schedule_node(db: Session, state: NodeState) -> NodeState:
     _save_interview(db, app_id, interview)
 
     # Send a confirmation with an ICS invite (email) or a text (WhatsApp).
+    candidate_ref = fresh.candidate_ref if fresh is not None else ""
     ics = None
     if scheduled_at:
         try:
-            start = datetime.fromisoformat(scheduled_at)
+            start = datetime.fromisoformat(str(scheduled_at).replace("Z", "+00:00"))
             ics = build_ics(
                 start_utc=start, summary="Interview", uid=f"welyne-interview-{app_id}",
                 description=f"Interview for application {app_id}.",
+                sequence=int(interview.get("sequence") or 0),
+                organizer=os.environ.get("SMTP_FROM") or os.environ.get("SMTP_USER") or None,
+                attendee=candidate_ref if "@" in candidate_ref else None,
             )
         except ValueError:
             ics = None
-    conf_recipient = recipient or (fresh.candidate_ref if fresh is not None else "")
-    when_text = conf.when or scheduled_at or "the scheduled time"
+    # Confirm on the channel the conversation actually used. A web candidate's
+    # `recipient` is the phone parsed off their CV, which WhatsApp may not be
+    # allowed to message — their email is the real address.
+    conf_recipient = recipient if channel == "whatsapp" else candidate_ref
+    # `interview["when"]` is the slot the candidate actually picked (portal /
+    # Cal.com); the LLM's echo of their reply is only a fallback.
+    when_text = interview.get("when") or conf.when or scheduled_at or "the scheduled time"
     with_ledger(
         db, app_id, "send_interview_confirmation", attempt,
         lambda: _send_interview_confirmation_impl(db, app_id, conf_recipient, when_text, ics),

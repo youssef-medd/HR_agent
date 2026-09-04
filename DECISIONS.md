@@ -278,6 +278,31 @@ Sprint 0-1 (ADR-013) delivered the foundation slice: FastAPI, JWT auth, LLM gate
 
 ---
 
+## ADR-016 · A declined interview invite closes the application with a rejection email
+
+**Date**: 2026-09-04
+**Status**: Accepted
+
+### Context
+Rejecting the `interview_invite` gate parked the application in `NEEDS_ATTENTION` and told the candidate nothing. The candidate's last message was a pre-screening they completed, so silence read as a stall, and the queue item stayed open with no action that would ever close it. The `rejection` email already existed but only behind the `rejection` gate on the `DECLINE_PENDING → DECLINED` leg, which a pre-screened candidate never reaches.
+
+### Decision
+- A rejected `interview_invite` sends the standard `rejection@v1` email (candidate's language) and advances `PRESCREENED → DECLINED`, a new legal edge.
+- The authorising human decision is the gate rejection itself: `execute_after_interview_declined_gate` asserts the `interview_invite` row is closed with `decision='reject'` before calling `_send_rejection_impl`, and writes the same `rejection_sent` audit row (with `gate` recorded). No second gate — it would ask the same recruiter the same question twice.
+- Ledger-guarded (`send_invite_decline_rejection`) and rate-limited like every other rejection.
+- No email on file (`candidate_ref` is not an address) still routes to `NEEDS_ATTENTION`: nothing can be sent, so a human must act.
+- Graph routing now halts on any terminal state (`is_terminal`) rather than on `NEEDS_ATTENTION` alone.
+
+### Consequences
+- Declining an invite is a one-click terminal action; the queue no longer accumulates items nobody can close.
+- `DECLINED` is now reachable from two legs; the state contract test still covers every state.
+- The post-interview `offer` rejection remains silent (`INTERVIEWED → NEEDS_ATTENTION`) — a post-interview no deserves its own copy, deliberately out of this scope.
+
+### References
+- `worker/orchestrator/{nodes,gates,graph,state_machine}.py`, `worker/tests/test_schedule_node.py`
+
+---
+
 ## ADR-015 · Extended masking + positional-bias probe — accepted & implemented
 
 **Date**: 2026-07-16

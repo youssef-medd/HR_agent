@@ -15,14 +15,38 @@ from orchestrator.side_effects import (
 )
 
 
-def test_portal_link(monkeypatch):
+def test_portal_link_carries_a_signed_token(monkeypatch):
+    """The link must not expose the raw application id (spec §7).
+
+    A sequential id lets anyone who knows a candidate's email walk 1, 2, 3…
+    until they reach that candidate's transcript, so the link carries a signed
+    token that round-trips back to the same (id, email) pair.
+    """
+    from app.portal_token import read_portal_token
+
     from orchestrator.emails import portal_link
 
+    monkeypatch.setenv("JWT_SECRET", "test-secret-for-portal-tokens")
     monkeypatch.setenv("PORTAL_URL", "https://careers.welyne.com/")
-    assert portal_link("a@b.io", 42) == "https://careers.welyne.com/portal?email=a%40b.io&ref=42"
+
+    link = portal_link("a@b.io", 42)
+    assert link.startswith("https://careers.welyne.com/portal?t=")
+    assert "ref=42" not in link and "a%40b.io" not in link
+
+    token = link.split("?t=", 1)[1]
+    assert read_portal_token(token) == (42, "a@b.io")
 
     monkeypatch.delenv("PORTAL_URL", raising=False)
-    assert portal_link("a@b.io", 7).endswith("/portal?email=a%40b.io&ref=7")
+    assert "/portal?t=" in portal_link("a@b.io", 7)
+
+
+def test_portal_link_falls_back_when_signing_unavailable(monkeypatch):
+    """A missing JWT_SECRET must degrade to the old form, not send a broken link."""
+    from orchestrator.emails import portal_link
+
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    monkeypatch.setenv("PORTAL_URL", "https://careers.welyne.com/")
+    assert portal_link("a@b.io", 42) == "https://careers.welyne.com/portal?email=a%40b.io&ref=42"
 
 
 def test_render_email_versioned_and_fallback():
