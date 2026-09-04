@@ -65,3 +65,6 @@ strong_cv.pdf
 api/strong_cv.pdf
 api/jd.pdf
 api/jd.docx
+
+# Local database dumps (contain candidate PII)
+backups/

@@ -1,6 +1,6 @@
 # Welyne HR — dev shortcuts. Runs inside the docker compose stack.
 
-.PHONY: test test-api test-worker evals evals-judge lint migrate
+.PHONY: test test-api test-worker evals evals-parser evals-judge lint migrate
 
 # --- Tests ---
 test: test-api test-worker
@@ -19,6 +19,9 @@ evals:
 		worker python -m orchestrator.evals --stub
 
 # Real A4 judge over the golden set (needs provider keys + the full corpus).
+evals-parser:
+	docker compose exec -T -e EVALS_CVS=/evals/golden/cvs -e EVALS_REPORTS=/evals/reports 		-e WHATSAPP_TOKEN= -e SMTP_USER= -e SMTP_PASS= 		worker python -m orchestrator.evals --parser
+
 evals-judge:
 	docker compose exec -T -e EVALS_GOLDEN=/evals/golden/fixtures.json -e EVALS_REPORTS=/evals/reports \
 		worker python -m orchestrator.evals

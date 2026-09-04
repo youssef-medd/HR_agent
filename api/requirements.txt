@@ -32,6 +32,10 @@ redis>=5.2
 pymupdf>=1.24
 python-docx>=1.1
 langdetect>=1.0.9
+# OCR fallback for scanned PDFs and image CVs. Needs the `tesseract-ocr`
+# system binary + language packs, installed in the Dockerfile.
+pytesseract>=0.3.13
+pillow>=11.0
 
 # Dev / CI
 ruff>=0.6
