@@ -12,6 +12,8 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("APP_ENV", "test")
+# Required by app.config; in docker compose it comes from .env, in CI it doesn't.
+os.environ.setdefault("JWT_SECRET", "unit-test-secret-do-not-use-in-prod-" + "x" * 32)
 
 import pytest  # noqa: E402
 from app.db import Base  # noqa: E402
